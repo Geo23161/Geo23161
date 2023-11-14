@@ -93,6 +93,7 @@ TEMPLATES = [
 ]
 
 ASGI_APPLICATION = 'perfectlov.asgi.application'
+WSGI_APPLICATION = 'perfectlov.wsgi.application'
 
 
 # Database
