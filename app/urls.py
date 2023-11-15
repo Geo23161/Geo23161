@@ -41,5 +41,6 @@ urlpatterns = [
     path('get_favorites/<str:typ>/', get_favorites, name='get_favorites'),
     path('want_lov/<int:pk>/', want_lov, name="want_lov"),
     path('set_quart/', set_quart, name="set_quart"),
+    path('get_pdetails/<str:key>/', get_pdetails, name="get_pdetails"),
     path('', include(router.urls)),
 ]

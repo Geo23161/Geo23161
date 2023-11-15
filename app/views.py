@@ -554,7 +554,8 @@ def set_abon(request) :
             verif = verifs.first()
             Abon.objects.filter(pk = abn.pk).update(verif = verif)
         user.cur_abn = abn
-        if state != 'free' :
+        aboned_before = Abon.objects.filter(user = request.user).exclude(pk = abn.pk).exists()
+        if state != 'free' or not aboned_before :
             essentials = request.user.get_essentials()
             now = timezone.now()
             day_string = f"{now.year}:{now.month}:{now.day}"
@@ -741,4 +742,11 @@ def set_quart(request) :
     return Response({
         'done' : True,
         'result' : json.loads(request.user.quart)
+    })
+
+@api_view(['GET'])
+def get_pdetails(request, key) :
+    return Response({
+        'done' : True,
+        'result' : json.loads(g_v(key))
     })
