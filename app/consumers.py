@@ -38,7 +38,8 @@ class LovConsumer(JsonWebsocketConsumer) :
                 'asset_url' : g_v('cloudinary:base'),
                 'notifs' : NotifSerializer(notifs, many = True).data,
                 'day_discuss' : json.loads(g_v('day:discuss')),
-                'bad_profil' : PerfectLovDetails.objects.filter(key=f"bad:profil:{self.scope['user'].pk}").exists()
+                'bad_profil' : PerfectLovDetails.objects.filter(key=f"bad:profil:{self.scope['user'].pk}").exists(),
+                'should_invite' : PerfectLovDetails.objects.filter(key="should_invite").exists(),
             }
             deleteds = []
             for room in all_rooms :
