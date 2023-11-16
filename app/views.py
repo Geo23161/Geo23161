@@ -750,3 +750,9 @@ def get_pdetails(request, key) :
         'done' : True,
         'result' : json.loads(g_v(key))
     })
+
+def terms(request) :
+    return render(request, "app/terms.html", {})
+
+def politique(request) :
+    return render(request, "app/politique.html", {})
