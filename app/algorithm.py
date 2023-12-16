@@ -62,7 +62,7 @@ def get_profils_by_me(user : User, excep : list[int]) :
     random.shuffle(last)
     if (len(finals) < DEFAULT_NUMBER) : 
         finals = finals + [
-            User.objects.get(pk = pk) for pk in last[:DEFAULT_NUMBER - len(finals)]
+            User.objects.get(pk = pk) for pk in last[:DEFAULT_NUMBER - len(finals)] if User.objects.filter(pk = pk).exists()
         ]
     random.shuffle(finals)
     return finals
