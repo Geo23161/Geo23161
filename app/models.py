@@ -330,7 +330,7 @@ class Niveau(models.Model) :
     level = models.IntegerField(default=0)
     taches = models.ManyToManyField(Taches, null=True, blank=True, related_name="niveaux")
     cur_task = models.IntegerField(default=0, null = True, blank=True)
-    help_dets = models.TextField(default=json.dumps(["L'aventure commence ici",  "Plongez dans des discussions de plus en plus profondes à mesure que vous progressez à travers nos niveaux de conversation"]) )
+    help_dets = models.TextField(default=json.dumps(["L'assistant de conversation",  "Il s'agit d'une IA dont le principal rôle est de vous proposer des sujets de discussions, des questions, des rendez-vous... Plus vous discutez, plus son niveau augmente et plus ils vous raprochent par ses propositions."]) )
     def get_task(self) :
         return Taches.objects.get(pk = self.cur_task)
     def get_help(self) :
@@ -555,7 +555,7 @@ class UserProfilSerializer(serializers.ModelSerializer) :
 
     class Meta :
         model = User
-        fields = ('id', 'get_profil', 'photos', 'prenom', 'get_sign', 'get_status')
+        fields = ('id', 'get_profil', 'photos', 'prenom', 'get_sign', 'get_status', 'last')
 
 class TacheSerializer(serializers.ModelSerializer) :
 
@@ -756,7 +756,7 @@ def get_the_match(user : User, me : User) :
 
 def can_match(user : User) :
     now = timezone.now()
-    rest = user.rooms.all().filter(created_at__lt = now, created_at__gt = (now - timezone.timedelta(days=7)))
+    rest = user.rooms.all().filter(is_proposed = True).filter(created_at__lt = now, created_at__gt = (now - timezone.timedelta(days=7)))
     return rest.count() < json.loads(g_v('week:match:limit'))[user.sex]
 
 def search_match(**kwargs) :
