@@ -11,7 +11,7 @@ import requests
 from .core import Kkiapay
 from django.utils import timezone
 from django.db import transaction
-from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me
+from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms
 from django.http import JsonResponse
 from random import choice
 
@@ -284,7 +284,7 @@ def get_new_photos(request) :
         seens = json.loads(request.user.seens_photos)
     except :
         seens = []
-    for room in request.user.rooms.all() :
+    for room in request.user.rooms.filter(is_proposed = False) :
         d = {
             'id' : 0,
             'new' : 0,
@@ -305,16 +305,15 @@ def get_new_photos(request) :
 @permission_classes([IsAuthenticated])
 def delete_room(request, pk) :
     room = RoomMatch.objects.filter(pk = pk)
-    channel_layer = get_channel_layer()
     if room.exists() :
         room = room.first()
         PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
         if request.user in room.users.all() :
             room.delete()
-    return Response({
-        'done' : True,
-        'result' :0
-    })
+        return Response({
+            'done' : True,
+            'result' :0,
+        })
     
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -562,6 +561,7 @@ def set_abon(request) :
             essentials["all_swipe"][day_string] = 0
             user.essentials = json.dumps(essentials)
         user.save()
+        set_anonyms(user)
         return Response({
             'done' : True,
             'result' : UserSerializer(User.objects.get(pk = request.user.pk)).data,
@@ -745,6 +745,28 @@ def set_quart(request) :
     })
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def deactivate_anonym(request, id) :
+    room = RoomMatch.objects.get(pk = id)
+    if request.user in room.users.all() :
+        refused = request.GET.get('refused')
+        anonym_off = PerfectLovDetails.objects.get_or_create(key = "anonym:off:room:" + str(id))[0]
+        lis = []
+        try :
+            lis = json.loads(anonym_off.value)
+        except :
+            pass
+        if not request.user.pk in lis : lis.append(request.user.pk)
+        anonym_off.value = json.dumps(lis if not refused else [])
+        anonym_off.save()
+        
+        return Response({
+            'done' : True,
+            'result' : 0
+        })
+        
+
+@api_view(['GET'])
 def get_pdetails(request, key) :
     return Response({
         'done' : True,
@@ -756,3 +778,104 @@ def terms(request) :
 
 def politique(request) :
     return render(request, "app/politique.html", {})
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def get_posts(request) :
+    excepts = json.loads(request.POST.get('excepts')) + request.user.get_exils()
+    
+    posts = Post.objects.exclude(pk__in = excepts).filter(origin = None).order_by('-created_at')
+    def set_seens() :
+        for p in posts[:15] :
+            p.seens.add(request.user)
+            p.save()
+    set_seens()
+    return Response({
+        'done' : True,
+        'result' : PostSerializer(posts[:15], context = {'request' : request}, many = True).data
+    })
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def get_my_posts(request) :
+    excepts = json.loads(request.POST.get('excepts'))
+    posts = request.user.posts.all().exclude(pk__in = excepts).filter(origin = None).order_by('-created_at')
+    def set_seens() :
+        for p in posts[:15] :
+            p.seens.add(request.user)
+            p.save()
+    set_seens()
+    return Response({
+        'done' : True,
+        'result' : PostSerializer(posts[:15], context = {'request' : request}, many = True).data
+    })
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def get_comments(request, id) :
+    excepts = json.loads(request.POST.get('excepts'))
+    posts = Post.objects.exclude(pk__in = excepts).filter(origin__pk = id).order_by('-created_at')
+    def set_seens() :
+        for p in posts[:15] :
+            p.seens.add(request.user)
+            p.save()
+    set_seens()
+    return Response({
+        'done' : True,
+        'result' : PostSerializer(posts[:15], context = {'request' : request}, many = True).data
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_post(request) :
+    text = request.POST.get('text')
+    image= request.FILES.get('image')
+    origin = request.POST.get('origin')
+    post = Post.objects.create(user = request.user, text = text, image = image )
+    if origin :
+        post.origin = Post.objects.get(pk = int(origin))
+        post.save()
+    return Response({
+        'done' : True,
+        'result' : PostSerializer(post, context = {'request' : request}).data
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def exile_post(request, id) :
+    request.user.set_exiles(id)
+    return Response({
+        'done' : True,
+        'result' : True
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def signaler_user(request, id) :
+    post = int(request.GET.get('post'))
+    signal_obj = PerfectLovDetails.objects.get_or_create(key = 'signal:obj')[0]
+    try :
+        users = json.loads(signal_obj.value)
+    except :
+        users = []
+    users.append(User.objects.get(pk = id).email)
+    signal_obj.value = json.dumps(users)
+    signal_obj.save()
+    request.user.set_exiles(post)
+    return Response({
+        'done' : True
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def likes_fact(request, id) :
+    post = Post.objects.get(pk = id)
+    if request.user in post.likes.all() :
+        post.likes.remove(request.user)
+    else :
+        post.likes.add(request.user)
+    return Response({
+        'done' : True,
+        'request' : request.user in post.likes.all()
+    })
+

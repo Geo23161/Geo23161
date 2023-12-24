@@ -3,6 +3,7 @@ from asgiref.sync import async_to_sync
 from .models import *
 from .views import send_by_thread
 import time
+from .algorithm import set_anonyms
 
 def get_delete(pk) :
     try :
@@ -57,6 +58,9 @@ class LovConsumer(JsonWebsocketConsumer) :
             self.accept()
             time.sleep(0.4)
             self.send_json(result)
+            for room in all_rooms :
+                r_ex = PerfectLovDetails.objects.filter(key = "anonym:off:room:" + str(room.pk))
+                if r_ex.exists() : r_ex.first().save()
         send_by_thread(initiate_all)
 
     def new_room(self, ev) :
@@ -64,6 +68,12 @@ class LovConsumer(JsonWebsocketConsumer) :
         return self.send_json(ev)
     
     def new_message(self, ev) :
+        return self.send_json(ev)
+    
+    def anonym_on(self, ev) :
+        return self.send_json(ev)
+    
+    def offnonym(self, ev) :
         return self.send_json(ev)
     
     def message_update(self, ev) :
@@ -164,6 +174,7 @@ class LovConsumer(JsonWebsocketConsumer) :
             user.set_essentials(old_ess)
             for pk in likes :
                 User.objects.get(pk = pk).likes.add(user)
+                set_anonyms(user)
                 search_match(action='post_add', reverse= True, instance=user, pk_set= {User.objects.get(pk = pk).pk}) 
             for m in matches :
                 target = User.objects.get(pk = m)

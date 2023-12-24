@@ -3,6 +3,7 @@ from django.utils import timezone
 from django.db.models import Q
 from random import randint, choice
 from django.db.models import Count
+import random
 
 def daily_tasks() :
     log = {
@@ -20,7 +21,8 @@ def daily_tasks() :
     except Exception as e :
         log['check_abon'] = e
     try :
-        set_love()
+        #set_love()
+        pass
     except Exception as e :
         log['set_love'] = e
     
@@ -30,12 +32,18 @@ def daily_tasks() :
     except Exception as e :
         log["set_macth"] = e 
     return log
+
+def deactivate_anonymous() :
+    for room in RoomMatch.objects.filter(is_proposed = True) :
+        room.is_proposed = False
+        room.save()
+    PerfectLovDetails.objects.get_or_create(key="anonym:general:off", value = timezone.now().isoformat())
     
 def get_possibles_users(user : User, r_excep = [] ) :
     excludes = [user.pk]
     for room in user.rooms.all() :
         excludes.append(the_other(room, user).pk)
-    res = User.objects.exclude(pk__in = excludes + r_excep)
+    res = User.objects.exclude(pk__in = excludes + r_excep).exclude()
     return res if IS_DEV else res.exclude(sex = user.sex)
 
 def get_profils_by_me_v2(user : User, ex_excepts : list[int], excep : list[int]) :
@@ -50,20 +58,21 @@ def get_rooms(user : User) :
 def get_profils_by_me(user : User, excep : list[int]) :
     ex_excepts = [ pk for pk in user.get_excepts() if not pk in excep]
     poss = get_possibles_users(user, excep + ex_excepts)
-    likes = user.like.all().intersection(poss).order_by('?')[:int(DEFAULT_NUMBER/2)]
+    likes = user.like.all().intersection(poss).order_by('?')[:random.randint(1, int(DEFAULT_NUMBER/2))]
     stars = poss.exclude(pk__in = [l.pk for l in likes]).annotate(likes__count = Count('likes')).order_by('-likes__count')[:DEFAULT_NUMBER - len(likes)]
-    finals = [
-        u for u in likes
-    ] + [
-        u for u in stars
-    ]
+    
+    finals =[
+                u for u in likes if u.get_profil()
+            ] + [
+                u for u in stars if u.get_profil()
+            ]
     rooms = get_rooms(user)
     last = [ pk for pk in ex_excepts if not pk in rooms ]
     random.shuffle(last)
-    if (len(finals) < DEFAULT_NUMBER) : 
-        finals = finals + [
-            User.objects.get(pk = pk) for pk in last[:DEFAULT_NUMBER - len(finals)] if User.objects.filter(pk = pk).exists()
-        ]
+    if (len(finals) < DEFAULT_NUMBER) :
+        finals =finals + [
+                User.objects.get(pk = pk) for pk in last[:DEFAULT_NUMBER - len(finals)] if User.objects.filter(pk = pk).exists()
+            ]
     random.shuffle(finals)
     return finals
 
@@ -271,3 +280,79 @@ def set_all_user_spe() :
     users = User.objects.all()
     for user in users :
         set_special_abo(user)
+
+def find_anonyms(user : User) :
+    i_likes = user.like.all().exclude(pk__in = get_rooms(user))
+    like_me =  user.likes.all().exclude(pk__in = get_rooms(user))
+    astro = find_by_astro(user)
+    inter = find_by_interests(user)
+    def build_coommon(target : User) :
+        commons = []
+        astroed =  target in [u['user'].pk for u in astro]
+        interested = [u for u in inter if u['user'].pk == target.pk][0]['cred'] if target in [u for u in inter] else []
+        
+        commons.append("L'un de vous a kiffé le profil de l'autre")
+        if astroed :
+            commons.append("Vos signes astrologiques sont compatibles")
+        if len(interested) :
+            commons.append(f"Vous êtes tous deux passionnés par {', '.join(interested[:3])+ ('...' if len(interested) > 3 else '.')}")
+        return commons
+    poss = like_me.union(i_likes)
+    common_inter = poss.union(User.objects.filter(pk__in=[u['user'].pk for u in inter]))
+    common_astro = poss.union(User.objects.filter(pk__in=[u['user'].pk for u in inter]))
+    common_inter_astro = common_inter.intersection(common_astro)
+    if common_inter_astro.count() :
+        for target in common_inter_astro :
+            if not target.anonym_out() :
+                return target, build_coommon(target)
+        
+    if common_inter.count() :
+        for target in common_inter :
+            if not target.anonym_out() :
+                return target, build_coommon(target)
+            
+    if common_astro.count() :
+        for target in common_astro :
+            if not target.anonym_out() :
+                return target, build_coommon(target)
+    if poss.count() :
+        for target in common_astro :
+            if not target.anonym_out() :
+                return target, build_coommon(target)
+    return None, []
+    
+def set_anonyms(user : User) :
+    count = user.rooms.filter(is_proposed = True).count()
+    anonym_conv = json.loads(g_v('anonym:conv'))
+    if count < anonym_conv[user.cur_abn.get_typ()['name']] :
+        for i in range(anonym_conv[user.cur_abn.get_typ()['name']] - count) :
+            target, commons = find_anonyms(user)
+            if not target :
+                break
+            task = Taches.objects.filter(niveau = 0).first()
+            niv = Niveau.objects.create(cur_task = task.pk)
+            niv.taches.add(task)
+            room_match = RoomMatch.objects.get_or_create(slug = room_slug(user, target))[0]
+            room_match.niveau = niv
+            room_match.is_proposed = True
+            room_match.anonymous_obj = json.dumps({
+                'commons' : commons,
+                'has_seen' : False
+            })
+            room_match.save()
+            room_match.users.add(user)
+            room_match.users.add(target)
+            channel_layer = get_channel_layer()
+            for use in room_match.users.all() :
+                async_to_sync(channel_layer.group_send)(f"{use.pk}m{use.pk}", {
+                    'type' : 'new_room',
+                    'result' : RoomSerializer(room_match).data
+                })
+                notif = Notif.objects.create(typ = 'new_anonym', text = "Vous avez une nouvelle proposition de discussion anonyme. Découvrez vos points communs.", photo = use.get_profil(), user  = the_other(room_match, user=use), urls = json.dumps([f"/af/{room_match.pk}"]))
+            user.set_history(target.pk)
+            target.set_history(user.pk)
+
+            return True
+    else :
+        return False
+

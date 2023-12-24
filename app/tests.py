@@ -1,4 +1,5 @@
 from django.test import TestCase
+from .algorithm import *
 
 # Create your tests here.
 
@@ -99,9 +100,21 @@ VIP_TYP = {
 }
 
 DAY_DISCUSS = {
-    'free' : 1,
-    'silver' : 3,
-    'silver_plus' : 5,
-    'golden' : 15,
+    'free' : 3,
+    'silver' : 5,
+    'silver_plus' : 15,
+    'golden' : 150,
     'vip' : 1000
 }
+
+ANONYM_CONV = {
+    'free' : 1,
+    'silver' : 6,
+    'silver_plus' : 9,
+    'golden' : 30,
+    'vip' : 1000
+}
+
+def test_anonym(email) :
+    u = User.objects.get(email__icontains = email)
+    set_anonyms(u)

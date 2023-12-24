@@ -43,4 +43,12 @@ urlpatterns = [
     path('set_quart/', set_quart, name="set_quart"),
     path('get_pdetails/<str:key>/', get_pdetails, name="get_pdetails"),
     path('', include(router.urls)),
+    path('deactivate_anonym/<int:id>/', deactivate_anonym, name="deactivate_anonym"),
+    path('get_posts/', get_posts, name="get_posts"),
+    path('get_comments/<int:id>/', get_comments, name="get_comments" ),
+    path('create_post/', create_post, name='create_post'),
+    path('exile_post/<int:id>/', exile_post, name="exile_post"),
+    path('signaler_user/<int:id>/', signaler_user, name="signaler_user"),
+    path('likes_fact/<int:id>/', likes_fact, name="likes_fact"),
+    path('get_my_posts/', get_my_posts, name="get_my_posts")
 ]

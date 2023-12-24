@@ -32,6 +32,11 @@ DEFAULT_ESSENTIALS = {
 }
 DEFAULT_NUMBER = 7
 IS_DEV = True
+ANONYM_MAX = 3
+
+def semaine_unique():
+    date_actuelle = timezone.now()
+    return f"sem:{date_actuelle.year}:{date_actuelle.isocalendar()[1]}"
 
 COMPATIBILITY_ASTRO = {
             "Bélier": {"Lion": 80, "Sagittaire": 70, "Verseau": 60, "Cancer": 50, "Balance": 40},
@@ -162,7 +167,7 @@ class User(AbstractBaseUser, PermissionsMixin) :
     objects = CustomUserManager()
     likes = models.ManyToManyField("User", related_name='like', null=True, blank=True)
     dislikes = models.ManyToManyField("User", related_name='dislike', null=True, blank=True)
-    created_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     last = models.DateTimeField(null=True, blank=True, default=timezone.now())
     essentials = models.TextField(null=True, blank=True)
     seens_photos = models.TextField(null=True, blank=True)
@@ -170,6 +175,39 @@ class User(AbstractBaseUser, PermissionsMixin) :
     place = models.TextField(null=True, blank=True)
     only_verified = models.BooleanField(default=True)
     last_like_notif = models.DateTimeField(null=True, blank=True)
+    anonym_history = models.TextField(null = True, blank = True)
+    exil_post = models.TextField(null = True, blank = True)
+
+    def get_exils(self) :
+        return json.loads(self.exil_post) if self.exil_post else []
+
+    def set_exiles(self, id) :
+        try :
+            exiles = json.loads(self.exil_post)
+        except :
+            exiles = []
+        exiles.append(id)
+        self.exil_post = exiles
+        self.save()
+
+    def anonym_out(self) :
+        anonym_conv = json.loads(g_v('anonym:conv'))
+        count = self.rooms.filter(is_proposed = True).count()
+        return count < anonym_conv[self.cur_abn.get_typ()['name'] if self.cur_abn else 'free']
+        
+    def set_history(self, pk) :
+        try :
+            history = json.loads(self.anonym_history)
+        except :
+            history = {
+                semaine_unique() : []
+            }
+        history[semaine_unique()].append(pk)
+        self.anonym_history = json.dumps(history)
+        self.save()
+
+    def get_anonyms(self) :
+        return json.loads(self.anonym_history) if self.anonym_history else None
     
     def set_excepts(self, excepts) :
         dets, created = PerfectLovDetails.objects.get_or_create(key = f'user:{self.pk}:excepts')
@@ -191,7 +229,9 @@ class User(AbstractBaseUser, PermissionsMixin) :
         try :
             vals = json.loads(dets.value)
         except :
-            vals = []
+            vals = [
+
+            ]
         return vals
 
     def get_txt_likes(self) :
@@ -344,7 +384,11 @@ class RoomMatch(models.Model) :
     niveau = models.OneToOneField(Niveau, related_name="room", on_delete=models.CASCADE, null=True, blank=True)
     is_proposed = models.BooleanField(default=False)
     why = models.TextField(default='Vous avez mutuellement kiffé vos photos de profil.')
+    anonymous_obj = models.TextField(null = True, blank = True)
+    is_categorized = models.BooleanField(default=False)
 
+    def get_anonymous(self) :
+        return json.loads(self.anonymous_obj) if self.anonymous_obj else None
     def next_niveau(self) :
         return set_niveau(self)
 
@@ -445,7 +489,8 @@ class Message(models.Model) :
 class Transaction(models.Model) :
     trans_id = models.CharField(max_length=150, null=True, blank=True)
     abn = models.ForeignKey(Abon, null=True, blank=True, on_delete=models.CASCADE, related_name="transactions")
-    created_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now=True)  
+
 
 
 def state_messag(room, user : User) :
@@ -516,8 +561,51 @@ class UserCode(models.Model) :
     reason = models.TextField(null=True, blank=True)
     code = models.ForeignKey(InvitCode, related_name="users", on_delete=models.CASCADE, null=True, blank=True)
     
+class Post(models.Model) :
+    user = models.ForeignKey(User, on_delete = models.CASCADE, related_name="posts", null = True, blank = True)
+    is_anonymous = models.BooleanField(default = False)
+    text = models.TextField(null = True, blank = True)
+    image = models.FileField(upload_to="posts/", null=True, blank=True)
+    likes = models.ManyToManyField(User, related_name="like_posts", blank=True)
+    origin = models.ForeignKey("Post", on_delete = models.CASCADE, related_name="comments", null = True, blank =True)
+    created_at = models.DateTimeField(auto_now_add = True)
+    seens = models.ManyToManyField(User, related_name="seen_posts", blank=True)
+
+    def get_likes(self) :
+        return self.likes.count()
+    
+    def get_seens(self) :
+        return self.seens.count()
+    
+    def get_comments(self) :
+        return self.comments.count()
+    
+    def get_image(self) :
+        return self.image.url if self.image else None
+
+
 
 #########################"Serializers"{{{{{{{{{{{{{{{}}}}}}}}}}}}}}}
+    
+class PostUserSerializer(serializers.ModelSerializer) :
+    class Meta :
+        model = User
+        fields = ('id', 'prenom', "get_picture", "created_at" )
+
+class PostSerializer(serializers.ModelSerializer) :
+    user = PostUserSerializer()
+    class Meta :
+        model = Post
+        fields = ('id', 'user', 'text', 'get_image', "get_likes", "get_comments", "created_at", "is_anonymous")
+
+    def to_representation(self, instance):
+        request = self.context.get('request')
+        representation = super().to_representation(instance)
+        if request :
+            representation['i_like'] = request.user in instance.likes.all()
+            representation['i_comment'] = request.user in instance.comments.all()
+
+        return representation
 
 class VerifSerializer(serializers.ModelSerializer) :
     class Meta :
@@ -580,7 +668,7 @@ class RoomSerializer(serializers.ModelSerializer) :
     niveau = NiveauSerializer()
     class Meta :
         model = RoomMatch
-        fields = ('id', 'users', 'slug', 'created_at', 'niveau', 'is_proposed', 'why')
+        fields = ('id', 'users', 'slug', 'created_at', 'niveau', 'is_proposed', 'why', 'get_anonymous')
 
 class ImageSerializer(serializers.ModelSerializer) :
     class Meta :
@@ -663,6 +751,25 @@ def send_message(sender, instance : Message, **kwargs):
 @receiver(post_save, sender = PerfectLovDetails)
 def send_lancher(sender, instance : PerfectLovDetails, **kwargs):
     channel_layer = get_channel_layer()
+    if 'anonym:off:room:' in instance.key :
+        room = RoomMatch.objects.get(pk = int(instance.key.split(':')[-1]))
+        if not instance.value : return 
+        val = json.loads(instance.value)
+        if len(val) < 2 :
+            async_to_sync(channel_layer.group_send)(room.slug, {
+                'type' : 'offnonym',
+                'result' : { 'room' : room.slug, 'val' : val}
+            })
+        else :
+            room.is_proposed = False
+            room.anonymous_obj = None
+            room.save()
+            async_to_sync(channel_layer.group_send)(room.slug, {
+                'type' : 'anonym_on',
+                'result' : room.slug
+            })
+            instance.delete()
+        
     if 'launcher:' in instance.key  :
         launcher = json.loads(instance.value)
         room = RoomMatch.objects.get(pk = launcher['id'])
@@ -756,7 +863,7 @@ def get_the_match(user : User, me : User) :
 
 def can_match(user : User) :
     now = timezone.now()
-    rest = user.rooms.all().filter(is_proposed = True).filter(created_at__lt = now, created_at__gt = (now - timezone.timedelta(days=7)))
+    rest = user.rooms.all().filter(is_categorized = True).filter(created_at__lt = now, created_at__gt = (now - timezone.timedelta(days=7)))
     return rest.count() < json.loads(g_v('week:match:limit'))[user.sex]
 
 def search_match(**kwargs) :
@@ -779,7 +886,7 @@ def search_match(**kwargs) :
             niv.taches.add(task)
             room_match = RoomMatch.objects.get_or_create(slug = room_slug(user, target))[0]
             room_match.niveau = niv
-            room_match.is_proposed = True
+            room_match.is_categorized = True
             room_match.why = g_v(f"why:{choic}") if choic != 'i' else g_v(f"why:{choic}").format(get_random_interest(target, user).name)
             room_match.save()
             room_match.users.add(user)
