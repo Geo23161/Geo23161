@@ -356,3 +356,19 @@ def set_anonyms(user : User) :
     else :
         return False
 
+def est_entre_vendredi_lundi(datetime_obj):
+    if IS_DEV : return True
+    # Récupérer le jour de la semaine (0 pour lundi, 6 pour dimanche)
+    jour_semaine = datetime_obj.weekday()
+
+    # Récupérer l'heure actuelle
+    heure_actuelle = datetime_obj.hour
+
+    # Vérifier si le jour de la semaine est vendredi (4) et l'heure est après 17h
+    # ou si le jour de la semaine est samedi (5) ou dimanche (6)
+    if (jour_semaine == 4 and heure_actuelle >= 17) or (5 <= jour_semaine <= 6):
+        return True
+    elif jour_semaine == 0 and heure_actuelle < 0:
+        # Si c'est lundi et que l'heure est avant minuit
+        return True
+    return False

@@ -11,9 +11,10 @@ import requests
 from .core import Kkiapay
 from django.utils import timezone
 from django.db import transaction
-from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms
+from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi
 from django.http import JsonResponse
 from random import choice
+from dateutil import parser
 
 DEFAULT_ESSENTIALS = {
     'all_swipe' : {},
@@ -185,17 +186,20 @@ def get__next(user : User, ex_excepts : list[int], excep : list[int]) :
 def get_profils(request, typ_rang) :
     excepts = json.loads(request.data.get('excepts'))
     excepts.append(request.user.pk)
+    date_string = request.data.get('date_string')
     for u in User.objects.filter(birth = None) :
         excepts.append(u.pk)
-    
     profils = get_profils_by_me(request.user, excepts) if typ_rang == 'for_you' else get_profils_by_proximity(user=request.user, excepts=excepts)
     request.user.set_excepts([
         p.pk for p in profils
     ])
+    datetime_obj = parser.parse(date_string)
+
     return Response({
         'done' : True,
         'result' : UserProfilSerializer(profils, many = True).data,
-        'other' : DEFAULT_NUMBER
+        'other' : DEFAULT_NUMBER,
+        'allowed' : est_entre_vendredi_lundi(datetime_obj)
     })
 
 @api_view(['POST'])
