@@ -324,8 +324,12 @@ def find_anonyms(user : User) :
 def set_anonyms(user : User) :
     count = user.rooms.filter(is_proposed = True).count()
     anonym_conv = json.loads(g_v('anonym:conv'))
-    if count < anonym_conv[user.cur_abn.get_typ()['name']] :
-        for i in range(anonym_conv[user.cur_abn.get_typ()['name']] - count) :
+    if user.cur_abn :
+        abn = user.cur_abn.get_typ()['name']
+    else :
+        abn = 'free'
+    if count < anonym_conv[abn] :
+        for i in range(anonym_conv[abn] - count) :
             target, commons = find_anonyms(user)
             if not target :
                 break

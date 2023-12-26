@@ -193,7 +193,11 @@ class User(AbstractBaseUser, PermissionsMixin) :
     def anonym_out(self) :
         anonym_conv = json.loads(g_v('anonym:conv'))
         count = self.rooms.filter(is_proposed = True).count()
-        return count < anonym_conv[self.cur_abn.get_typ()['name'] if self.cur_abn else 'free']
+        if self.cur_abn :
+            abn = self.cur_abn.get_typ()['name']
+        else :
+            abn = 'free'
+        return count < anonym_conv[abn]
         
     def set_history(self, pk) :
         try :
