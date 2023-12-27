@@ -43,7 +43,7 @@ def get_possibles_users(user : User, r_excep = [] ) :
     excludes = [user.pk]
     for room in user.rooms.all() :
         excludes.append(the_other(room, user).pk)
-    res = User.objects.exclude(pk__in = excludes + r_excep).exclude()
+    res = User.objects.exclude(pk__in = excludes + r_excep).exclude(birth = None)
     return res if IS_DEV else res.exclude(sex = user.sex)
 
 def get_profils_by_me_v2(user : User, ex_excepts : list[int], excep : list[int]) :
@@ -376,3 +376,17 @@ def est_entre_vendredi_lundi(datetime_obj):
         # Si c'est lundi et que l'heure est avant minuit
         return True
     return False
+
+def get_emergency(user : User) :
+    users = []
+    anonym_conv = json.loads(g_v('anonym:conv'))
+    for us in get_possibles_users(user) :
+        if us.cur_abn :
+            abn = us.cur_abn.get_typ()['name']
+        else :
+            abn = 'free'
+        cats_com = us.cats.all().intersection(user.cats.all())
+        if us.rooms.filter(is_proposed = True).count() < anonym_conv[abn] or (can_match(us) and cats_com.count()) :
+            users.append(us)
+    all_users = User.objects.filter(pk__in = [u.pk for u in users]).annotate(likes__count = Count('likes')).order_by('-likes__count')
+    return all_users

@@ -11,7 +11,7 @@ import requests
 from .core import Kkiapay
 from django.utils import timezone
 from django.db import transaction
-from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi
+from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi, get_emergency
 from django.http import JsonResponse
 from random import choice
 from dateutil import parser
@@ -153,7 +153,7 @@ def register_user(request) :
 
     def add_to_user() :
         set_distance(user)
-        set__next(user, [])
+        #set__next(user, [])
         #set_match_one(user, RoomMatch.objects.none())
     send_by_thread(add_to_user)
     return Response({
@@ -190,6 +190,10 @@ def get_profils(request, typ_rang) :
     for u in User.objects.filter(birth = None) :
         excepts.append(u.pk)
     profils = get_profils_by_me(request.user, excepts) if typ_rang == 'for_you' else get_profils_by_proximity(user=request.user, excepts=excepts)
+    if (request.user.rooms.count() == 0) and len(excepts) > 0 :
+        emergs = get_emergency(request.user).exclude(pk__in=excepts)[:DEFAULT_NUMBER/2]
+        profils = list(emergs) + profils[:DEFAULT_NUMBER - len(emergs)]
+        random.shuffle(profils)
     request.user.set_excepts([
         p.pk for p in profils
     ])

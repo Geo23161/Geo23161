@@ -202,6 +202,8 @@ class User(AbstractBaseUser, PermissionsMixin) :
     def set_history(self, pk) :
         try :
             history = json.loads(self.anonym_history)
+            history[semaine_unique()]
+            print(self.anonym_history)
         except :
             history = {
                 semaine_unique() : []
