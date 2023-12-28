@@ -31,7 +31,7 @@ DEFAULT_ESSENTIALS = {
     'already_seens' : []
 }
 DEFAULT_NUMBER = 7
-IS_DEV = True
+IS_DEV = False
 ANONYM_MAX = 3
 
 def calculer_age(date_naissance):
