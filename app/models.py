@@ -34,6 +34,18 @@ DEFAULT_NUMBER = 7
 IS_DEV = True
 ANONYM_MAX = 3
 
+def calculer_age(date_naissance):
+    # Obtenez la date actuelle
+    date_actuelle = timezone.now()
+
+    # Calculez la différence entre la date actuelle et la date de naissance
+    difference = date_actuelle - date_naissance
+
+    # Extrait l'année de la différence
+    age = difference.days // 365
+
+    return age
+
 def semaine_unique():
     date_actuelle = timezone.now()
     return f"sem:{date_actuelle.year}:{date_actuelle.isocalendar()[1]}"
@@ -177,6 +189,15 @@ class User(AbstractBaseUser, PermissionsMixin) :
     last_like_notif = models.DateTimeField(null=True, blank=True)
     anonym_history = models.TextField(null = True, blank = True)
     exil_post = models.TextField(null = True, blank = True)
+
+    def get_age(self) :
+        try :
+            return str(calculer_age(self.birth)) 
+        except :
+            return "25"
+        
+    def get_des(self) :
+        return json.loads(self.searching)
 
     def get_exils(self) :
         return json.loads(self.exil_post) if self.exil_post else []
@@ -649,7 +670,7 @@ class UserProfilSerializer(serializers.ModelSerializer) :
 
     class Meta :
         model = User
-        fields = ('id', 'get_profil', 'photos', 'prenom', 'get_sign', 'get_status', 'last')
+        fields = ('id', 'get_profil', 'photos', 'prenom', 'get_sign', 'get_status', 'last', 'get_age', 'get_des')
 
 class TacheSerializer(serializers.ModelSerializer) :
 
@@ -803,13 +824,13 @@ def get_notif_title(typ : str) :
     if typ == 'delete_room' :
         return "Match supprimé"
     elif typ == "expired_abon" :
-        return "Abonnement expiré"
+        return "Ticket expiré"
     elif typ == "new_like" :
         return "De nouveaux likes"
     elif typ == "new_match" :
         return "Nouveau Match"
     elif typ == "new_abon" :
-        return "Nouveau abonnement activé"
+        return "Nouveau ticket activé"
     else :
         return "Notification"
 @receiver(post_save, sender=Notif)

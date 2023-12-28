@@ -85,7 +85,7 @@ def check_all_matches() :
     for room in rooms :
         last_message = room.messages.all().order_by('-created_at').first() if room.messages.all().count() else None
         if last_message :
-            if (now - last_message.created_at) > timezone.timedelta(days=14) :
+            if (now - last_message.created_at) > timezone.timedelta(days=7) :
                 for user in room.users.all() :
                     Notif.objects.create(typ = 'delete_room', text = g_v('notif:delete:room').format(the_other(room, user).prenom), photo = the_other(room, user).get_profil(), user = user )
                 PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
