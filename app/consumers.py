@@ -49,7 +49,7 @@ class LovConsumer(JsonWebsocketConsumer) :
                 ])
                 async_to_sync(self.channel_layer.group_add)(room.slug, self.channel_name)
             async_to_sync(self.channel_layer.group_add)(f"{self.scope['user'].pk}m{self.scope['user'].pk}", self.channel_name)
-            
+            async_to_sync(self.channel_layer.group_add)("celibapps", self.channel_name)
             result = {
                 'type' : 'initialisation',
                 'result' : done,
@@ -71,6 +71,9 @@ class LovConsumer(JsonWebsocketConsumer) :
         return self.send_json(ev)
     
     def anonym_on(self, ev) :
+        return self.send_json(ev)
+    
+    def new_post(self, ev) :
         return self.send_json(ev)
     
     def offnonym(self, ev) :
@@ -137,6 +140,7 @@ class LovConsumer(JsonWebsocketConsumer) :
             matches = content['matches']
             rescues = content['rescues']
             nivs = content['nivs']
+            oth_matches = content['oth_matches']
             for niv in nivs :
                 room = RoomMatch.objects.filter(pk = niv['room'])
                 if room.exists() :
@@ -175,7 +179,8 @@ class LovConsumer(JsonWebsocketConsumer) :
             for pk in likes :
                 User.objects.get(pk = pk).likes.add(user)
                 set_anonyms(user)
-                search_match(action='post_add', reverse= True, instance=user, pk_set= {User.objects.get(pk = pk).pk}) 
+                #search_match(action='post_add', reverse= True, instance=user, pk_set= {User.objects.get(pk = pk).pk}) 
+            
             for m in matches :
                 target = User.objects.get(pk = m)
                 if not RoomMatch.objects.filter(slug = room_slug(user, target)).exists() :
@@ -193,6 +198,24 @@ class LovConsumer(JsonWebsocketConsumer) :
                             'result' : RoomSerializer(room_match).data
                         })
                         notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif').format(use.prenom, room_match.why.lower()), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+            for m in oth_matches :
+                target = User.objects.get(pk = m['user'])
+                if not RoomMatch.objects.filter(slug = room_slug(user, target)).exists() :
+                    task = Taches.objects.filter(niveau = 0).first()
+                    niv = Niveau.objects.create(cur_task = task.pk)
+                    niv.taches.add(task)
+                    room_match = RoomMatch.objects.get_or_create(slug = room_slug(user, target))[0]
+                    room_match.niveau = niv
+                    room_match.why = g_v(f"why:match:{m['typ']}").format(m['obj'])
+                    room_match.save()
+                    room_match.users.add(user)
+                    room_match.users.add(target)
+                    for use in room_match.users.all() :
+                        async_to_sync(self.channel_layer.group_send)(f"{use.pk}m{use.pk}", {
+                            'type' : 'new_room',
+                            'result' : RoomSerializer(room_match).data
+                        })
+                        if use.pk != user.pk : notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif:from:inter').format(use.prenom), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
             for iid in rescues :
                 try :
                     mes = Message.objects.get(pk = iid)

@@ -190,8 +190,8 @@ def get_profils(request, typ_rang) :
     for u in User.objects.filter(birth = None) :
         excepts.append(u.pk)
     profils = get_profils_by_me(request.user, excepts) if typ_rang == 'for_you' else get_profils_by_proximity(user=request.user, excepts=excepts)
-    if (request.user.rooms.count() == 0) and len(excepts) > 0 :
-        emergs = get_emergency(request.user).exclude(pk__in=excepts)[:DEFAULT_NUMBER/2]
+    if (request.user.rooms.filter(created_at__gt = timezone.now() - timezone.timedelta(days=10)).count() == 0) :
+        emergs = get_emergency(request.user).exclude(pk__in=excepts)[:random.randint(1,3)]
         profils = list(emergs) + profils[:DEFAULT_NUMBER - len(emergs)]
         random.shuffle(profils)
     request.user.set_excepts([
@@ -201,7 +201,7 @@ def get_profils(request, typ_rang) :
 
     return Response({
         'done' : True,
-        'result' : UserProfilSerializer(profils, many = True).data,
+        'result' : UserProfilSerializer(profils, context = {'request' : request}, many = True).data,
         'other' : DEFAULT_NUMBER,
         'allowed' : est_entre_vendredi_lundi(datetime_obj)
     })
@@ -442,14 +442,16 @@ def set_info(request) :
     email = request.data.get('email')
     sex = request.data.get('sex')
     prenom = request.data.get('prenom')
+    searching = json.loads(request.data.get('searching'))
     user = request.user
     user.email = email
     user.sex = sex
     user.prenom = prenom
+    user.searching = json.dumps(searching)
     user.save()
     """ 
     User.objects.filter(pk = request.user.pk).update(email = email, sex = sex, prenom = prenom)
- """
+    """ 
     return Response({
         'done' : True,
         'result' : UserSerializer(request.user).data
@@ -887,3 +889,26 @@ def likes_fact(request, id) :
         'request' : request.user in post.likes.all()
     })
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_interest(request) :
+    match_obj = json.loads(request.data.get('match_obj'))
+    notif = Notif.objects.create(typ = 'send_inter', text = g_v('new:inter:notif').format(request.user.prenom, match_obj['obj']), photo = request.user.get_profil(), user  = User.objects.get(pk = match_obj['user']), urls = json.dumps([f"/profil/{request.user.pk}", f"{json.dumps(match_obj)}"]))
+    return Response({
+        'done' : True
+    })
+    
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def set_text_cat(request) :
+    match_obj = json.loads(request.data.get('match_obj'))
+    print(match_obj)
+    text = request.data.get('text')
+    notif = Notif.objects.get_or_create(typ = 'send_inter', text = g_v('new:inter:notif').format(request.user.prenom, match_obj['obj']), photo = request.user.get_profil(), user  = User.objects.get(pk = match_obj['user']))[0]
+    match_obj['user'] = request.user.pk
+    notif.urls = json.dumps([f"/profil/{request.user.pk}", f"{json.dumps(match_obj)}[]{text}"])
+    notif.save()
+    return Response({
+        'done' : True,
+    })
+    

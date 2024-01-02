@@ -58,13 +58,19 @@ def get_rooms(user : User) :
 def get_profils_by_me(user : User, excep : list[int]) :
     ex_excepts = [ pk for pk in user.get_excepts() if not pk in excep]
     poss = get_possibles_users(user, excep + ex_excepts)
-    likes = user.like.all().intersection(poss).order_by('?')[:random.randint(1, int(DEFAULT_NUMBER/2))]
-    stars = poss.exclude(pk__in = [l.pk for l in likes]).annotate(likes__count = Count('likes')).order_by('-likes__count')[:DEFAULT_NUMBER - len(likes)]
+    likes = user.like.all().intersection(poss).order_by('?')[:random.randint(0, 2)]
+    hazards = [ u  for u in poss.exclude(pk__in = [p.pk for p in likes]).order_by('-created_at')[:500]]
+    random.shuffle(hazards)
+    hazards = hazards[:random.randint(1, int(DEFAULT_NUMBER/2))]
+
+    stars = poss.exclude(pk__in = [l.pk for l in likes] + [u.pk for u in hazards]).annotate(likes__count = Count('likes')).order_by('-likes__count')[:DEFAULT_NUMBER - ( likes.count() + len( hazards))]
     
     finals =[
                 u for u in likes if u.get_profil()
             ] + [
                 u for u in stars if u.get_profil()
+            ] + [
+                u for u in hazards if u.get_profil()
             ]
     rooms = get_rooms(user)
     last = [ pk for pk in ex_excepts if not pk in rooms ]
@@ -386,7 +392,7 @@ def get_emergency(user : User) :
         else :
             abn = 'free'
         cats_com = us.cats.all().intersection(user.cats.all())
-        if us.rooms.filter(is_proposed = True).count() < anonym_conv[abn] or (can_match(us) and cats_com.count()) :
+        if us.rooms.filter(is_proposed = True).count() < anonym_conv[abn] or  cats_com.count() :
             users.append(us)
     all_users = User.objects.filter(pk__in = [u.pk for u in users]).annotate(likes__count = Count('likes')).order_by('-likes__count')
     return all_users

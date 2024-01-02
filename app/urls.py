@@ -50,5 +50,7 @@ urlpatterns = [
     path('exile_post/<int:id>/', exile_post, name="exile_post"),
     path('signaler_user/<int:id>/', signaler_user, name="signaler_user"),
     path('likes_fact/<int:id>/', likes_fact, name="likes_fact"),
-    path('get_my_posts/', get_my_posts, name="get_my_posts")
+    path('get_my_posts/', get_my_posts, name="get_my_posts"),
+    path('send_interest/', send_interest, name="send_interest"),
+    path('send_text_cat/', set_text_cat)
 ]

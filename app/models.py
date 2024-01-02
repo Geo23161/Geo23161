@@ -163,6 +163,15 @@ class Cat(models.Model) :
     name = models.CharField(max_length=150, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+class StyleWord(models.Model) :
+    masculin = models.CharField(max_length = 150, null = True, blank = True)
+    feminin = models.CharField(max_length = 150, null = True, blank = True)
+    pluriels = models.CharField(max_length = 150, null = True, blank = True)
+    created_at = models.DateTimeField(auto_now_add = True)
+
+class Emoji(models.Model) :
+    emoji = models.CharField(max_length = 10, null = True, blank = True)
+    created_at = models.DateTimeField(auto_now_add = True)
 
 class User(AbstractBaseUser, PermissionsMixin) :
     prenom = models.CharField(max_length=150, null=True, blank=True)
@@ -321,6 +330,20 @@ class User(AbstractBaseUser, PermissionsMixin) :
     
     def get_sign(self) :
         return signe_astrologique(self.birth)
+
+class Reaction(models.Model) :
+    actor = models.ForeignKey(User, related_name = "reactions", on_delete = models.CASCADE, null = True, blank = True)
+    target = models.ForeignKey(User, related_name = "provoked", on_delete = models.CASCADE, null = True, blank = True)
+    emoji = models.ForeignKey(Emoji, related_name = "reactions", on_delete = models.CASCADE, null = True, blank = True)
+    word = models.ForeignKey(StyleWord, related_name = "reactions", on_delete = models.CASCADE, null = True, blank = True)
+    created_at = models.DateTimeField(auto_now_add = True)
+
+    def get_emoji(self) :
+        return None if not self.emoji else self.emoji.emoji
+    
+    def get_word(self) :
+        return None if not self.word else {'masculin' : self.word.masculin, 'feminin' : self.word.feminin}
+    
 
 class Verif(models.Model) :
     piece = models.ImageField(upload_to="pieces/")
@@ -610,9 +633,12 @@ class Post(models.Model) :
     def get_image(self) :
         return self.image.url if self.image else None
 
-
-
 #########################"Serializers"{{{{{{{{{{{{{{{}}}}}}}}}}}}}}}
+
+class ReactionSerializer(serializers.ModelSerializer) :
+    class Meta :
+        model = Reaction
+        fields = ('id', 'get_emoji', 'get_word')
     
 class PostUserSerializer(serializers.ModelSerializer) :
     class Meta :
@@ -662,7 +688,7 @@ class UserSerializer(serializers.ModelSerializer) :
     cats = CatSerializer(many = True)
     class Meta :
         model = User
-        fields = ('id', 'get_profil', 'photos', 'prenom', 'email', 'birth', 'sex', 'searching', 'quart', 'get_sign', 'cur_abn', 'get_likes', 'cats', 'only_verified', 'get_status')
+        fields = ('id', 'get_profil', 'photos', 'prenom', 'email', 'birth', 'sex', 'searching', 'quart', 'get_sign', 'cur_abn', 'get_likes', 'cats', 'only_verified', 'get_status', 'get_des')
 
 class UserProfilSerializer(serializers.ModelSerializer) :
     get_profil = PhotoSerializer()
@@ -671,6 +697,26 @@ class UserProfilSerializer(serializers.ModelSerializer) :
     class Meta :
         model = User
         fields = ('id', 'get_profil', 'photos', 'prenom', 'get_sign', 'get_status', 'last', 'get_age', 'get_des')
+
+    def to_representation(self, instance):
+        request = self.context.get('request')
+        representation = super().to_representation(instance)
+        if request :
+            representation['like_me'] = request.user in instance.like.all()
+            representation['commons'] = [{'id' : c.pk, 'name' : c.name} for c in instance.cats.all().intersection(request.user.cats.all())]
+            if Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).exists() :
+                representation['reaction'] = ReactionSerializer(Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).first()).data
+        return representation
+
+class EmojiSerializer(serializers.ModelSerializer) :
+    class Meta :
+        model = Emoji
+        fields = ('id', 'emoji')
+
+class StyleWord(serializers.ModelSerializer) :
+    class Meta :
+        model = StyleWord
+        fields = ('id', 'masculin', 'feminin')
 
 class TacheSerializer(serializers.ModelSerializer) :
 
@@ -688,7 +734,7 @@ class SimpleUserSerializer(serializers.ModelSerializer) :
 
     class Meta :
         model = User
-        fields = ('id', 'prenom', 'get_picture', 'last', 'get_status')
+        fields = ('id', 'prenom', 'get_picture', 'last', 'get_status', 'get_des')
 
 class RoomSerializer(serializers.ModelSerializer) :
     users = SimpleUserSerializer(many = True)
@@ -738,6 +784,17 @@ def send_new_room(sender, instance : RoomMatch, **kwargs):
                 'result' : RoomSerializer(instance).data
             })
 """
+
+@receiver(post_save, sender = Post)
+def sen_message(sender, instance : Post, **kwargs):
+    channel_layer = get_channel_layer()
+    print(not instance.origin)
+    if kwargs['created'] and not instance.origin :
+        async_to_sync(channel_layer.group_send)('celibapps', {
+                'type' : 'new_post',
+                'result' : 0,
+        })
+
 @receiver(post_save, sender = Message)
 def send_message(sender, instance : Message, **kwargs):
     channel_layer = get_channel_layer()
@@ -836,6 +893,8 @@ def get_notif_title(typ : str) :
 @receiver(post_save, sender=Notif)
 def send_push_notif( sender, instance : Notif, created, **kwargs ) :
     if created :
+        if not instance.urls : 
+            return None
         channel_layer = get_channel_layer()
         try :
             async_to_sync(channel_layer.group_send)(f"{instance.user.pk}m{instance.user.pk}", {
@@ -843,7 +902,9 @@ def send_push_notif( sender, instance : Notif, created, **kwargs ) :
                 'result' : NotifSerializer(instance).data
             })
             devices = FCMDevice.objects.filter(user = instance.user)
-            for device in devices : 
+            for device in devices :
+                if not instance.urls : 
+                    return None
                 urls = json.loads(instance.urls)
                 device.send_message(
                         message = FCMMess(notification=Notification(title=get_notif_title(instance.typ), body= instance.text, image=instance.get_photo() if instance.photo else None)
@@ -890,8 +951,8 @@ def get_the_match(user : User, me : User) :
 
 def can_match(user : User) :
     now = timezone.now()
-    rest = user.rooms.all().filter(is_categorized = True).filter(created_at__lt = now, created_at__gt = (now - timezone.timedelta(days=7)))
-    return rest.count() < json.loads(g_v('week:match:limit'))[user.sex]
+    rest = user.rooms.all().filter(is_categorized = True).filter(created_at__lt = now, created_at__gt = (now - timezone.timedelta(days=10)))
+    return rest.count() < 5
 
 def search_match(**kwargs) :
     if kwargs['action'] == 'post_add' and kwargs['reverse'] :
