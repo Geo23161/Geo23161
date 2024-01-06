@@ -702,7 +702,7 @@ class UserProfilSerializer(serializers.ModelSerializer) :
         request = self.context.get('request')
         representation = super().to_representation(instance)
         if request :
-            representation['like_me'] = request.user in instance.like.all()
+            representation['i_like'] = request.user in instance.like.all()
             representation['commons'] = [{'id' : c.pk, 'name' : c.name} for c in instance.cats.all().intersection(request.user.cats.all())]
             if Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).exists() :
                 representation['reaction'] = ReactionSerializer(Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).first()).data
