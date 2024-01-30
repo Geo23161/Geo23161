@@ -52,5 +52,13 @@ urlpatterns = [
     path('likes_fact/<int:id>/', likes_fact, name="likes_fact"),
     path('get_my_posts/', get_my_posts, name="get_my_posts"),
     path('send_interest/', send_interest, name="send_interest"),
-    path('send_text_cat/', set_text_cat)
+    path('send_text_cat/', set_text_cat),
+    path('super_like/', super_like),
+    path('all_moods/', all_mood),
+    path('set_mood/', set_mood),
+    path('get_groups/', get_groups),
+    path('get_group/', get_group),
+    path('create_group/', create_group),
+    path('join_group/', join_group),
+    path('quit_group/', quit_group)
 ]

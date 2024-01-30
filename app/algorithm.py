@@ -42,6 +42,8 @@ def deactivate_anonymous() :
 def get_possibles_users(user : User, r_excep = [] ) :
     excludes = [user.pk]
     for room in user.rooms.all() :
+        if not (room.users.count() > 1) :
+            continue
         excludes.append(the_other(room, user).pk)
     res = User.objects.exclude(pk__in = excludes + r_excep).exclude(birth = None)
     return res if IS_DEV else res.exclude(sex = user.sex)
@@ -83,7 +85,7 @@ def get_profils_by_me(user : User, excep : list[int]) :
     return finals
 
 def the_other(room, user) :
-    return room.users.all().exclude(pk = user.pk).first()
+    return room.users.all().exclude(pk = user.pk).first() if room.users.count() > 1 else user
 
 def check_all_matches() :
     now = timezone.now()
@@ -91,11 +93,20 @@ def check_all_matches() :
     for room in rooms :
         last_message = room.messages.all().order_by('-created_at').first() if room.messages.all().count() else None
         if last_message :
-            if (now - last_message.created_at) > timezone.timedelta(days=7) :
-                for user in room.users.all() :
-                    Notif.objects.create(typ = 'delete_room', text = g_v('notif:delete:room').format(the_other(room, user).prenom), photo = the_other(room, user).get_profil(), user = user )
+            if (now - last_message.created_at) > timezone.timedelta(days=4) :
+                
                 PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
                 room.delete()
+                if room.groups.count() :
+                    for gr in room.groups.all() :
+                        for user in room.users.all().intersection(gr.users.all()) :
+                            pass
+                            #Notif.objects.create(typ = 'delete_room', text = g_v('notif:delete:groom').format(gr.get_oth_name(user)), photo = gr.creator.get_profil(), user = user )
+                else :
+                    for user in room.users.all() :
+                        Notif.objects.create(typ = 'delete_room', text = g_v('notif:delete:room').format(the_other(room, user).prenom), photo = the_other(room, user).get_profil(), user = user )
+    
+            
 
 def check_abon() :
     now = timezone.now()
@@ -305,7 +316,7 @@ def find_anonyms(user : User) :
         return commons
     poss = like_me.union(i_likes)
     common_inter = poss.union(User.objects.filter(pk__in=[u['user'].pk for u in inter]))
-    common_astro = poss.union(User.objects.filter(pk__in=[u['user'].pk for u in inter]))
+    common_astro = poss.union(User.objects.filter(pk__in=[u['user'].pk for u in astro]))
     common_inter_astro = common_inter.intersection(common_astro)
     if common_inter_astro.count() :
         for target in common_inter_astro :
@@ -321,10 +332,10 @@ def find_anonyms(user : User) :
         for target in common_astro :
             if not target.anonym_out() :
                 return target, build_coommon(target)
-    if poss.count() :
+    """ if poss.count() :
         for target in common_astro :
             if not target.anonym_out() :
-                return target, build_coommon(target)
+                return target, build_coommon(target) """
     return None, []
     
 def set_anonyms(user : User) :
@@ -396,3 +407,11 @@ def get_emergency(user : User) :
             users.append(us)
     all_users = User.objects.filter(pk__in = [u.pk for u in users]).annotate(likes__count = Count('likes')).order_by('-likes__count')
     return all_users
+
+
+def find_proposed(group : UserGroup, is_first = False) :
+    excepts = [g.pk for g in group.proposeds.all()] + [g.pk for g in group.rooms.all()] + [group.pk]
+    choice = UserGroup.objects.exclude(pk__in = excepts).exclude(creator__sex = group.creator.sex).order_by('?').first()
+    return choice
+
+

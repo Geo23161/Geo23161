@@ -11,16 +11,26 @@ import requests
 from .core import Kkiapay
 from django.utils import timezone
 from django.db import transaction
-from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi, get_emergency
+from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi, get_emergency, find_proposed
 from django.http import JsonResponse
 from random import choice
 from dateutil import parser
+from django.db.models import Count
+import string
+
+def generate_random_string(length=8):
+    characters = string.ascii_letters + string.digits
+    random_string = ''.join(random.choice(characters) for _ in range(length))
+    if UserGroup.objects.filter(code = random_string).exists() :
+        return generate_random_string()
+    else :
+        return random_string
 
 DEFAULT_ESSENTIALS = {
     'all_swipe' : {},
     'seen_tofs' : [],
     'already_seens' : []
-}   
+}
 
 def the_other(room, user) :
     return room.users.all().exclude(pk = user.pk).first()
@@ -137,6 +147,10 @@ def register_user(request) :
     quart = request.data.get('quart')
     pquart = json.loads(request.data.get('pquart'))
     cats = json.loads(request.data.get('cats'))
+    if not img_pk :
+        return Response({
+            'done' : False,
+        })
 
     user = User.objects.create_user(prenom = prenom, email = email, password=password, sex = sex, searching = searching, quart = quart)
     user.birth = datetime.datetime.strptime(birth, "%Y-%m-%dT%H:%M:%S")
@@ -198,12 +212,12 @@ def get_profils(request, typ_rang) :
         p.pk for p in profils
     ])
     datetime_obj = parser.parse(date_string)
-
     return Response({
         'done' : True,
         'result' : UserProfilSerializer(profils, context = {'request' : request}, many = True).data,
         'other' : DEFAULT_NUMBER,
-        'allowed' : est_entre_vendredi_lundi(datetime_obj)
+        'allowed' : est_entre_vendredi_lundi(datetime_obj),
+        'mood' : request.user.get_mood()
     })
 
 @api_view(['POST'])
@@ -293,17 +307,21 @@ def get_new_photos(request) :
     except :
         seens = []
     for room in request.user.rooms.filter(is_proposed = False) :
+        if not (room.users.count() > 1) :
+            continue
+        print(room.users.all())
         d = {
             'id' : 0,
             'new' : 0,
             'tots': 0
         }
         user = room.users.exclude(pk = request.user.pk).first()
-        d['id'] = user.pk
-        photos = user.photos.all()
-        d['tots'] = photos.count()
-        d['new'] = photos.filter(is_profil = False).exclude(pk__in = seens).count()
-        matches.append(d)
+        if user.get_picture() :
+            d['id'] = user.pk
+            photos = user.photos.all()
+            d['tots'] = photos.count()
+            d['new'] = photos.filter(is_profil = False).exclude(pk__in = seens).count()
+            matches.append(d)
     return Response({
         'done' : True,
         'result' : matches
@@ -313,15 +331,35 @@ def get_new_photos(request) :
 @permission_classes([IsAuthenticated])
 def delete_room(request, pk) :
     room = RoomMatch.objects.filter(pk = pk)
+    is_group = request.GET.get('is_group')
     if room.exists() :
         room = room.first()
-        PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
-        if request.user in room.users.all() :
-            room.delete()
-        return Response({
+        channel_layer = get_channel_layer()
+        slug = room.slug
+        prenom = room.prenom
+        if not is_group :
+            PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
+            if request.user in room.users.all() :
+                room.delete()
+        else :
+            room.users.remove(request.user)
+            if [u.pk for u in room.groups.all()[0].users.all() ] == [u.pk for u in room.users.all()] or [u.pk for u in room.groups.all()[-1].users.all() ] == [u.pk for u in room.users.all()] :
+                room.delete()
+                PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
+        async_to_sync(channel_layer.group_send)(slug, {
+            'type' : 'rmvu_from_r',
+            'result' : {
+                'user' : request.user.pk,
+                'slug' : slug,
+                'prenom' : prenom
+            },
+        })
+
+    return Response({
             'done' : True,
             'result' :0,
         })
+    
     
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -361,6 +399,7 @@ def create_message(request) :
     blob = request.FILES.get('blob')
     preview = request.FILES.get('preview')
     state = request.POST.get('state')
+    reply = message['get_reply'] if "get_reply" in message.keys() else None 
     can_cont = True
     channel_layer = get_channel_layer()
     
@@ -393,7 +432,9 @@ def create_message(request) :
                     video = Video.objects.create(name = f"vid:{request.user.pk}", video = blob, details = json.dumps(message['video']['get_details']), image = preview)
                     
                     messag = Message.objects.create(room = room, video = video, user = message['user'], old_pk = message['old_pk'] )
-                    
+                if reply :
+                    message.reply = reply
+                    message.save()
             #handle_mess_perm(message['get_room'], request.user, message['old_pk'])
         else :
             
@@ -902,9 +943,8 @@ def send_interest(request) :
 @permission_classes([IsAuthenticated])
 def set_text_cat(request) :
     match_obj = json.loads(request.data.get('match_obj'))
-    print(match_obj)
     text = request.data.get('text')
-    notif = Notif.objects.get_or_create(typ = 'send_inter', text = g_v('new:inter:notif').format(request.user.prenom, match_obj['obj']), photo = request.user.get_profil(), user  = User.objects.get(pk = match_obj['user']))[0]
+    notif = Notif.objects.get_or_create(typ = 'send_inter', text = g_v(f'new:{"inter" if match_obj["typ"] == "interest" else match_obj["typ"]}:notif').format(request.user.prenom, match_obj['obj']), photo = request.user.get_profil(), user  = User.objects.get(pk = match_obj['user']))[0]
     match_obj['user'] = request.user.pk
     notif.urls = json.dumps([f"/profil/{request.user.pk}", f"{json.dumps(match_obj)}[]{text}"])
     notif.save()
@@ -912,3 +952,185 @@ def set_text_cat(request) :
         'done' : True,
     })
     
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def super_like(request) :
+    pk = int(request.data.get('pk'))
+    user = User.objects.get(pk = pk)
+    user.super_likes.add(request.user)
+    notif = Notif.objects.get_or_create(typ = 'send_sl', text = g_v(f'new:sl:notif').format(request.user.prenom), photo = request.user.get_profil(), user  = User.objects.get(pk = pk))[0]
+    notif.urls = json.dumps([f"/profil/{request.user.pk}", f"{json.dumps({'user' : request.user.pk, 'typ' : 'super-like', 'obj' : ''})}[]"])
+    notif.save()
+    return Response({
+        'done' : True,
+        'result' : 0
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def all_mood(request) :
+    moods = Mood.objects.all().annotate(users__count = Count('users') ).order_by('-users__count')
+    
+    return Response({
+        'done' : True,
+        'result' : MoodSerializer(moods, many = True).data
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def set_mood(request) :
+    pk =  int(request.data.get('pk'))
+    mood = None if not pk else Mood.objects.get(pk = pk)
+    request.user.mood = mood
+    request.user.save()
+    return Response({
+        'done' : True,
+        'result' : MoodSerializer(mood).data if pk else {
+            'id' : 0,
+            'name' : "Aucune envie"
+        }
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_groups(request) :
+    likes_pk = []
+    excepts = json.loads(request.data.get('excepts'))
+    g_rooms = excepts + [g.pk for g in request.user.my_groups.all()] + [g.pk for g in UserGroup.objects.annotate(us_count = Count('users')).filter(us_count = 1)]  + [g.pk for g in UserGroup.objects.annotate(g_users = Count('users')).filter(g_users__lt = 2)] + ([] if IS_DEV else [g.pk for g in UserGroup.objects.filter(creator__sex = request.user.sex)])
+    
+    for group in request.user.my_groups.all() :
+        likes_pk += [g.pk for g in group.likes.all()]
+        g_rooms += ([g.pk for g in group.matches.all()] + [group.sem_match.pk if group.sem_match else 0])
+    random.shuffle(likes_pk)
+    famous_pk = [ g.pk for g in UserGroup.objects.exclude(pk__in = g_rooms).annotate(all_likes = Count('likes')).order_by('-all_likes')[:10] if not g.pk in likes_pk  ]
+    news_pk = [ g.pk for g in UserGroup.objects.exclude(pk__in = g_rooms).order_by('-created_at')[:20] if not g.pk in famous_pk  if not g.pk in (famous_pk + likes_pk) ]
+    random.shuffle(famous_pk)
+    random.shuffle(news_pk)
+    finals_pk = likes_pk[:random.randint(0, 3)]
+    finals_pk += famous_pk[:random.randint(2, 4)]
+    finals_pk = list(set(finals_pk))
+    finals_pk += news_pk[:DEFAULT_NUMBER - len(finals_pk)]
+    print(finals_pk)
+    return Response({
+        'done' : True,
+        'result' : GroupSerializer(UserGroup.objects.filter(pk__in = finals_pk).order_by('?'), context = {'request' : request},  many = True).data
+    })
+    
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def get_group(request) :
+    return Response({
+        'done' : True,
+        'result' : GroupSerializer(UserGroup.objects.get(pk = int(request.data.get('id'))), context = {'request' : request}).data
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def create_group(request) :
+    agroup = request.user.my_groups.all().annotate(us_count = Count('users')).filter(us_count = 1)
+    if agroup.exists() :
+        return Response({
+            'done' : True, 
+            'result' : 0
+        })
+    else :
+        group = UserGroup.objects.create(creator = request.user, code = generate_random_string(6))
+        group.users.add(request.user)
+        room_us = RoomMatch.objects.create(slug = room_slug(group, group, is_group=True))
+        task = Taches.objects.filter(niveau = 0).first()
+        niv = Niveau.objects.create(cur_task = task.pk)
+        niv.taches.add(task)
+        room_us.niveau = niv
+        room_us.save()
+        room_us.users.add(request.user)
+        room_us.groups.add(group)
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(f"{request.user.pk}m{request.user.pk}", {
+            'type' : 'new_group',
+            'result' : ChatGroupSerializer(group).data
+        })
+        return Response({
+            'done' : True,
+            'result' : group.code
+        })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def join_group(request) :
+    code = request.data.get('code')
+    group = UserGroup.objects.filter(code = code)
+    if not group.exists() : 
+        return Response({
+            'done' : False
+        })
+    if group.first().users.count() == 4 :
+        return Response({
+            'done' : False
+        })
+
+    """if request.user in group.first().users.all() :
+        return Response({
+            'done' : False
+        })"""
+    group = group.first()
+    channel_layer = get_channel_layer()
+    group.users.add(request.user)
+    for room in group.rooms.all() :
+        room.users.add(request.user)
+        if room.users.count() > 1 and group.rooms.count() == 1 :
+            group_proposed = find_proposed(group, True)
+            if group_proposed :
+                room_match = RoomMatch.objects.get_or_create(slug = room_slug(group_proposed, group, True))[0]
+                task = Taches.objects.filter(niveau = 0).first()
+                niv = Niveau.objects.create(cur_task = task.pk)
+                niv.taches.add(task)
+                room_match.niveau = niv
+                room_match.save()
+                for us in group.users.all() :
+                    room_match.users.add(us)
+                for us in group_proposed.users.all() :
+                    room_match.users.add(us)
+                room_match.groups.add(group, group_proposed)
+            """ for use in room_match.users.all() :
+                
+                async_to_sync(channel_layer.group_send)(f"{use.pk}m{use.pk}", {
+                    'type' : 'new_room',
+                    'result' : RoomSerializer(room_match).data
+                })
+                notif = Notif.objects.create(typ = 'new_gmatch', text = g_v('new:gpmatch:notif').format( group.get_oth_name(use) if use in group.users.all() else group_proposed.get_oth_name()), user  = use, urls = json.dumps([ f"/groom/{room_match.slug}"])) """
+
+    
+    async_to_sync(channel_layer.group_send)(f"{request.user.pk}m{request.user.pk}", {
+        'type' : 'new_group',
+        'result' : ChatGroupSerializer(group).data
+    })
+    for use in group.users.all().exclude(pk = request.user.pk) :
+        async_to_sync(channel_layer.group_send)(f"{use.pk}m{use.pk}", {
+                        'type' : 'update_gusers',
+                        'result' : ChatGroupSerializer(group).data
+                    })
+    
+    return Response({
+        'done' : True
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def quit_group(request) :
+    group = UserGroup.objects.get(pk = int(request.data.get('pk')))
+    slugs = group.quit_group(request.user)
+    channel_layer = get_channel_layer()
+    for use in group.users.all() :
+        async_to_sync(channel_layer.group_send)(f"{use.pk}m{use.pk}", {
+            'type' : 'rmvu_from_g',
+            'result' : {
+                'user' : request.user.pk,
+                'slug' : group.pk,
+                'prenom' : request.user.prenom
+            },
+        })
+    return Response({
+        'done' : True,
+        'result' : slugs
+    })

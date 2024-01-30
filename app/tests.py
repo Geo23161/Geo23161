@@ -120,6 +120,31 @@ ANONYM_CONV = {
     'vip' : 50
 }
 
+GS_LIMITS = {
+    'free' : {
+        'swipe' : 3,
+        'discuss' : 1
+    },
+    'silver' : {
+        'swipe' : 8,
+        'discuss' : 3
+    },
+    'silver_plus' : {
+        'swipe' : 18,
+        'discuss' : 8
+    },
+    'golden' : {
+        'swipe' : 50,
+        'discuss' : 15
+    },
+    'vip' : {
+        'swipe' : 100,
+        'discuss' : 50
+    }
+}
+
 def test_anonym(email) :
     u = User.objects.get(email__icontains = email)
     set_anonyms(u)
+
+"{0} partage le même mood que vous: {1}. Ecrivez-lui"

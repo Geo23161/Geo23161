@@ -31,7 +31,7 @@ DEFAULT_ESSENTIALS = {
     'already_seens' : []
 }
 DEFAULT_NUMBER = 7
-IS_DEV = False
+IS_DEV = True
 ANONYM_MAX = 3
 
 def calculer_age(date_naissance):
@@ -68,9 +68,9 @@ COMPATIBILITY_ASTRO = {
 
 # Create your models here.
 
-def room_slug(user1, user2) :
+def room_slug(user1, user2, is_group = False) :
     ordered = sorted([user1.pk, user2.pk])
-    return f"{ordered[0]}m{ordered[1]}"
+    return ("" if not is_group else "g") + f"{ordered[0]}m{ordered[1]}"
 
 def the_other(room, user) :
     return room.users.all().exclude(pk = user.pk).first()
@@ -173,6 +173,11 @@ class Emoji(models.Model) :
     emoji = models.CharField(max_length = 10, null = True, blank = True)
     created_at = models.DateTimeField(auto_now_add = True)
 
+class Mood(models.Model) :
+    name = models.TextField(null = True, blank = True)
+    created_at = models.DateTimeField(auto_now = True)
+
+
 class User(AbstractBaseUser, PermissionsMixin) :
     prenom = models.CharField(max_length=150, null=True, blank=True)
     email = models.EmailField(unique=True)
@@ -187,6 +192,7 @@ class User(AbstractBaseUser, PermissionsMixin) :
     is_active = models.BooleanField(default=True)
     objects = CustomUserManager()
     likes = models.ManyToManyField("User", related_name='like', null=True, blank=True)
+    super_likes = models.ManyToManyField("User", related_name='super_like', null=True, blank=True)
     dislikes = models.ManyToManyField("User", related_name='dislike', null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     last = models.DateTimeField(null=True, blank=True, default=timezone.now())
@@ -198,7 +204,11 @@ class User(AbstractBaseUser, PermissionsMixin) :
     last_like_notif = models.DateTimeField(null=True, blank=True)
     anonym_history = models.TextField(null = True, blank = True)
     exil_post = models.TextField(null = True, blank = True)
+    mood = models.ForeignKey(Mood, on_delete = models.CASCADE, related_name = "users", null = True, blank = True)
 
+    def get_mood(self) :
+        return MoodSerializer(self.mood).data
+    
     def get_age(self) :
         try :
             return str(calculer_age(self.birth)) 
@@ -323,13 +333,40 @@ class User(AbstractBaseUser, PermissionsMixin) :
     def get_profil(self) :
         return self.photos.filter(is_profil = True).first()
     
-    def get_picture(self) : 
+    def get_picture(self) :
         p = self.get_profil().get_picture()
         lis = p.split("/upload/")
         return "/upload/q_auto/".join(lis) if len(lis) > 1 else ""
     
     def get_sign(self) :
         return signe_astrologique(self.birth)
+    
+class UserGroup(models.Model) :
+    creator = models.ForeignKey(User, related_name="groups_created", null = True, blank = True, on_delete=models.CASCADE)
+    users = models.ManyToManyField(User, related_name="my_groups")
+    likes = models.ManyToManyField("UserGroup", related_name="like")
+    created_at = models.DateTimeField(auto_now_add = True)
+    code = models.CharField(max_length=150, null = True, blank = True)
+    rooms = models.ManyToManyField("RoomMatch", related_name="groups", null = True, blank = True)
+    matches = models.ManyToManyField("UserGroup", related_name="is_matches", null= True, blank = True)
+    sem_match = models.ForeignKey("UserGroup", on_delete=models.PROTECT, related_name="is_sem_for", null = True, blank = True)
+    proposeds = models.ManyToManyField("UserGroup", related_name="is_proposed", null= True, blank = True)
+    def quit_group(self, us : User) :
+        self.users.remove(us)
+        for ro in self.rooms.all() :
+            ro.users.remove(us)
+        return [r.slug for r in self.rooms.all()]
+    
+
+
+    def get_creator(self) :
+        return self.creator.pk
+    
+    def get_name(self) :
+        return " ".join([u.prenom + f"{',' if self.users.all()[self.users.all().count() - 1].pk != u.pk else ''}" for u in self.users.all()])
+    
+    def get_oth_name(self, use : User) :
+        return " ".join([u.prenom + f"{',' if self.users.all().exclude(pk = use.pk)[self.users.all().exclude(pk = use.pk).count()-1].pk == u.pk else ''}" for u in self.users.all().exclude(pk = use.pk)])
 
 class Reaction(models.Model) :
     actor = models.ForeignKey(User, related_name = "reactions", on_delete = models.CASCADE, null = True, blank = True)
@@ -343,7 +380,6 @@ class Reaction(models.Model) :
     
     def get_word(self) :
         return None if not self.word else {'masculin' : self.word.masculin, 'feminin' : self.word.feminin}
-    
 
 class Verif(models.Model) :
     piece = models.ImageField(upload_to="pieces/")
@@ -359,7 +395,7 @@ class Verif(models.Model) :
 
 class Photos(models.Model) :
     name = models.CharField(max_length=150, null=True, blank=True)
-    file = models.ImageField(upload_to="photos/")
+    file = models.ImageField(upload_to="photos/", max_length=500)
     is_profil = models.BooleanField(default=False)
     user = models.ForeignKey(User, related_name="photos", null=True, blank=True, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now=True)
@@ -437,6 +473,12 @@ class RoomMatch(models.Model) :
     anonymous_obj = models.TextField(null = True, blank = True)
     is_categorized = models.BooleanField(default=False)
 
+    def is_match(self) :
+        return (UserGroup.objects.get(pk = self.get_groups()[0]) in UserGroup.objects.get(pk = self.get_groups()[len(self.get_groups()) -1]).matches.all()) if self.groups.count() else False
+
+    def get_groups(self) :
+        return [g.pk for g in self.groups.all()] if self.groups.count() else 0
+
     def get_anonymous(self) :
         return json.loads(self.anonymous_obj) if self.anonymous_obj else None
     def next_niveau(self) :
@@ -477,8 +519,6 @@ class Image(models.Model) :
         width, height = img.size
         self.set_details(self.add_elt(width))
         self.set_details(self.add_elt(height))
-
-        
     
 
 class Audio(models.Model) :
@@ -533,6 +573,13 @@ class Message(models.Model) :
     video = models.OneToOneField(Video, related_name="message", on_delete=models.CASCADE, null=True, blank=True)
     user = models.IntegerField(default=0)
     old_pk = models.BigIntegerField(default=0)
+    reply = models.TextField(null = True, blank =True)
+    
+
+    def get_reply(self) :
+        rep = json.loads(self.reply) if self.reply else None
+        return rep      
+
     def get_room(self) :
         return self.room.pk 
     
@@ -611,6 +658,7 @@ class UserCode(models.Model) :
     reason = models.TextField(null=True, blank=True)
     code = models.ForeignKey(InvitCode, related_name="users", on_delete=models.CASCADE, null=True, blank=True)
     
+    
 class Post(models.Model) :
     user = models.ForeignKey(User, on_delete = models.CASCADE, related_name="posts", null = True, blank = True)
     is_anonymous = models.BooleanField(default = False)
@@ -634,6 +682,11 @@ class Post(models.Model) :
         return self.image.url if self.image else None
 
 #########################"Serializers"{{{{{{{{{{{{{{{}}}}}}}}}}}}}}}
+    
+class MoodSerializer(serializers.ModelSerializer) :
+    class Meta :
+        model = Mood
+        fields = ('id', 'name')
 
 class ReactionSerializer(serializers.ModelSerializer) :
     class Meta :
@@ -698,14 +751,22 @@ class UserProfilSerializer(serializers.ModelSerializer) :
         model = User
         fields = ('id', 'get_profil', 'photos', 'prenom', 'get_sign', 'get_status', 'last', 'get_age', 'get_des')
 
-    def to_representation(self, instance):
+    def to_representation(self, instance : User):
         request = self.context.get('request')
         representation = super().to_representation(instance)
         if request :
             representation['i_like'] = request.user in instance.like.all()
             representation['commons'] = [{'id' : c.pk, 'name' : c.name} for c in instance.cats.all().intersection(request.user.cats.all())]
+            if not (len(representation['commons']) and request.user.rooms.filter(is_proposed = False).count()) :
+                compats = COMPATIBILITY_ASTRO[instance.get_sign()]
+                if request.user.get_sign() in compats.keys() :
+                    representation['commons'] = [{'id' : 0, 'name' : 'sign'}]
+
             if Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).exists() :
                 representation['reaction'] = ReactionSerializer(Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).first()).data
+            representation['reaction'] = MoodSerializer(instance.mood).data
+            representation['has_room'] = instance.rooms.all().filter(created_at__gt = timezone.now() - timezone.timedelta(days = 6), created_at__lt = timezone.now()).count()
+            
         return representation
 
 class EmojiSerializer(serializers.ModelSerializer) :
@@ -741,7 +802,7 @@ class RoomSerializer(serializers.ModelSerializer) :
     niveau = NiveauSerializer()
     class Meta :
         model = RoomMatch
-        fields = ('id', 'users', 'slug', 'created_at', 'niveau', 'is_proposed', 'why', 'get_anonymous')
+        fields = ('id', 'users', 'slug', 'created_at', 'niveau', 'is_proposed', 'why', 'get_anonymous', 'get_groups', 'is_match')
 
 class ImageSerializer(serializers.ModelSerializer) :
     class Meta :
@@ -764,12 +825,35 @@ class MessageSerializer(serializers.ModelSerializer) :
     video = VideoSerializer()
     class Meta :
         model = Message
-        fields = ('id', 'get_room', 'created_at', 'step', 'text', 'image', 'audio', 'video' ,'user', 'old_pk' )
+        fields = ('id', 'get_room', 'created_at', 'step', 'text', 'image', 'audio', 'video' ,'user', 'old_pk', 'get_reply' )
 
 class NotifSerializer(serializers.ModelSerializer) :
     class Meta :
         model = Notif
         fields = ('id', 'typ', "text", "get_photo", "created_at", "get_urls")
+
+
+class GroupSerializer(serializers.ModelSerializer) :
+    users = UserProfilSerializer(many = True)
+    class Meta :
+        model = UserGroup
+        fields = ('id', 'users', 'get_creator', 'get_name')
+    
+    def to_representation(self, instance : UserGroup):
+        request = self.context.get('request')
+        representation = super().to_representation(instance)
+        my_groups = request.user.my_groups.all()
+        representation['like_us'] = [ g.pk for g in instance.likes.all() if g in my_groups ]
+
+        return representation 
+
+class ChatGroupSerializer(serializers.ModelSerializer) :
+    users = SimpleUserSerializer(many = True)
+    rooms = RoomSerializer(many = True)
+    class Meta :
+        model = UserGroup
+        fields = ('id', 'get_name', 'get_creator', 'code', 'users', 'rooms')
+
 
 ###################################Signaux#################################
 """
@@ -829,7 +913,7 @@ def send_message(sender, instance : Message, **kwargs):
     else :
         async_to_sync(channel_layer.group_send)(instance.room.slug, {
                 'type' : 'messsage_update',
-                'result' : [instance.step, instance.pk]
+                'result' : [instance.step, instance.pk, instance.get_reply()]
         })
 
 @receiver(post_save, sender = PerfectLovDetails)

@@ -39,6 +39,8 @@ class LovConsumer(JsonWebsocketConsumer) :
                 'asset_url' : g_v('cloudinary:base'),
                 'notifs' : NotifSerializer(notifs, many = True).data,
                 'day_discuss' : json.loads(g_v('day:discuss')),
+                'spl_invents' : json.loads(g_v('spl:invents')),
+                'gr_limits' : json.loads(g_v('gs:limits')),
                 'bad_profil' : PerfectLovDetails.objects.filter(key=f"bad:profil:{self.scope['user'].pk}").exists(),
                 'should_invite' : PerfectLovDetails.objects.filter(key="should_invite").exists(),
             }
@@ -66,8 +68,19 @@ class LovConsumer(JsonWebsocketConsumer) :
     def new_room(self, ev) :
         async_to_sync(self.channel_layer.group_add)(ev['result']['slug'], self.channel_name)
         return self.send_json(ev)
+
+    def rmvu_from_r(self, ev) :
+        return self.send_json(ev)
+    
+    def rmvu_from_g(self, ev) :
+        return self.send_json(ev)
     
     def new_message(self, ev) :
+        return self.send_json(ev)
+    
+    def new_group(self, ev) :
+        for r in ev['result']['rooms'] :
+            async_to_sync(self.channel_layer.group_add)(r['slug'], self.channel_name)
         return self.send_json(ev)
     
     def anonym_on(self, ev) :
@@ -95,10 +108,14 @@ class LovConsumer(JsonWebsocketConsumer) :
     
     def new_photo(self, ev) :
         return self.send_json(ev)
+        
+    def update_gusers(self, ev) :
+        return self.send_json(ev)
     
     def s_o(self, ev) :
-        if ev['result'][0] != self.scope['user'].pk :
-            return self.send_json(ev)
+        """if ev['result'][0] != self.scope['user'].pk :
+            return self.send_json(ev)"""
+        return self.send_json(ev)
     
     def launcher_send(self, ev) :
         if ev['result']['author'] != self.scope['user'].pk :
@@ -112,6 +129,9 @@ class LovConsumer(JsonWebsocketConsumer) :
                 'type' : 'refused',
                 'result' : 0
             })
+        
+    def rm_room(self, ev) :
+        async_to_sync(self.channel_layer.group_discard)(ev['result'], self.channel_name)
 
     def new_niveau(self, ev) :
         print(ev)
@@ -137,10 +157,21 @@ class LovConsumer(JsonWebsocketConsumer) :
                 })
             essentials = content['essentials']
             likes = content['likes']
+            glikes = content['glikes']
             matches = content['matches']
             rescues = content['rescues']
             nivs = content['nivs']
             oth_matches = content['oth_matches']
+            not_matches = content['not_matches']
+            gmatches = content['gmatches']
+            g_users = content['g_users']
+            for gu in g_users :
+                grp = UserGroup.objects.get(pk = int(gu['id']))
+                if grp.users.count() < gu['users'] :
+                    self.send_json({
+                        'type' : 'update_gusers',
+                        'result' : ChatGroupSerializer(grp).data
+                    })
             for niv in nivs :
                 room = RoomMatch.objects.filter(pk = niv['room'])
                 if room.exists() :
@@ -160,6 +191,20 @@ class LovConsumer(JsonWebsocketConsumer) :
                 if key == 'all_swipe' :
                     for k,v in value.items() :
                         old_ess['all_swipe'][k] = v
+                elif key == 'gr_swipe' :
+                    for k,v in value.items() :
+                        try :
+                            old_ess['gr_swipe'][k] = v
+                        except :
+                            old_ess['gr_swipe'] = {}
+                            old_ess['gr_swipe'][k] = v
+                elif key == 'all_slikes' :
+                    for k,v in value.items() :
+                        try :
+                            old_ess['all_slikes'][k] = v
+                        except :
+                            old_ess['all_slikes'] = {}
+                            old_ess['all_slikes'][k] = v
                 elif key == 'seens_tofs' :
                     for pk in value :
                         old_ess['seen_tofs'].append(pk)
@@ -178,9 +223,15 @@ class LovConsumer(JsonWebsocketConsumer) :
             user.set_essentials(old_ess)
             for pk in likes :
                 User.objects.get(pk = pk).likes.add(user)
-                set_anonyms(user)
+                total_swipe =0
+                for key in essentials['all_swipe'].keys() :
+                    total_swipe += essentials['all_swipe'][key]
+                if total_swipe > 6 : set_anonyms(user)
                 #search_match(action='post_add', reverse= True, instance=user, pk_set= {User.objects.get(pk = pk).pk}) 
-            
+            for pk in glikes :
+                print('glikes', pk)
+                for group in user.my_groups.all() :
+                    group.like.add(UserGroup.objects.get(pk = pk))
             for m in matches :
                 target = User.objects.get(pk = m)
                 if not RoomMatch.objects.filter(slug = room_slug(user, target)).exists() :
@@ -192,13 +243,41 @@ class LovConsumer(JsonWebsocketConsumer) :
                     room_match.save()
                     room_match.users.add(user)
                     room_match.users.add(target)
+                    if m['typ'] == 'day-match' :
+                        room_match.why = g_v('why:match:day-match')
+                        room_match.save()
                     for use in room_match.users.all() :
                         async_to_sync(self.channel_layer.group_send)(f"{use.pk}m{use.pk}", {
                             'type' : 'new_room',
                             'result' : RoomSerializer(room_match).data
                         })
-                        notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif').format(use.prenom, room_match.why.lower()), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+                        notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif' if m['typ'] != 'day-match' else 'new:match:notif:from:day-match' ).format(use.prenom, room_match.why.lower()), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+            for m in gmatches :
+                g_author = UserGroup.objects.get(pk = m['author'])
+                g_target = UserGroup.objects.get(pk = m['target'])
+                if not RoomMatch.objects.filter(slug = room_slug(g_author, g_target, True)).exists() :
+                    room_match = RoomMatch.objects.get_or_create(slug = room_slug(g_author, g_target, True))[0]
+                    task = Taches.objects.filter(niveau = 0).first()
+                    niv = Niveau.objects.create(cur_task = task.pk)
+                    niv.taches.add(task)
+                    room_match.niveau = niv
+                    room_match.save()
+                    for us in g_author.users.all() :
+                        room_match.users.add(us)
+                    for us in g_target.users.all() :
+                        room_match.users.add(us)
+                    room_match.groups.add(g_author, g_target)
+                    g_target.matches.add(g_author)
+                    g_author.matches.add(g_target)
+                    for use in room_match.users.all() :
+                        async_to_sync(self.channel_layer.group_send)(f"{use.pk}m{use.pk}", {
+                            'type' : 'new_room',
+                            'result' : RoomSerializer(room_match).data
+                        })
+                        notif = Notif.objects.create(typ = 'new_gmatch', text = g_v('new:gmatch:notif').format( g_author.get_oth_name(use) if use in g_author.users.all() else g_target.get_oth_name(use)), user  = use, urls = json.dumps([ f"/groom/{room_match.slug}"]))
+
             for m in oth_matches :
+                
                 target = User.objects.get(pk = m['user'])
                 if not RoomMatch.objects.filter(slug = room_slug(user, target)).exists() :
                     task = Taches.objects.filter(niveau = 0).first()
@@ -215,7 +294,17 @@ class LovConsumer(JsonWebsocketConsumer) :
                             'type' : 'new_room',
                             'result' : RoomSerializer(room_match).data
                         })
-                        if use.pk != user.pk : notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif:from:inter').format(use.prenom), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+                        if use.pk == user.pk :
+                            if m['typ'] == 'interest' : notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif:from:inter').format(use.prenom), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+                            else :
+                                notif = Notif.objects.create(typ = 'new_match', text = g_v(f'new:match:notif:from:{m["typ"]}').format(use.prenom), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+            for m in not_matches :
+                if PerfectLovDetails.objects.filter(key='prevent:over:notif').exists() :
+                    continue
+                notif = Notif.objects.get_or_create(typ = 'send_inter', text = g_v(f'new:{"inter" if m["typ"] == "interest" else m["typ"]}:notif').format(user.prenom, m['obj']), photo = user.get_profil(), user  = User.objects.get(pk = m['user']))[0]
+                m['user'] = user.pk
+                notif.urls = json.dumps([f"/profil/{user.pk}", f"{json.dumps(m)}[]"])
+                notif.save()
             for iid in rescues :
                 try :
                     mes = Message.objects.get(pk = iid)
@@ -227,21 +316,27 @@ class LovConsumer(JsonWebsocketConsumer) :
             if mess.step == 'sent' :
                 mess.step = 'delivered'
                 mess.save()
+        
         elif content['type'] == 's_s' :
             mess = Message.objects.get(pk = content['result'])
             mess.step = 'seen'
             mess.save()
         elif content['type'] == 'keeping' :
             pks = content['result']
-            room_pks = content['other']
+            room_pks = content['other']['room']
+            grp_pks = content['other']['group']
             print(room_pks)
             messages = Message.objects.filter(pk__in = pks)
             final= [ [m.step, m.pk] for m in messages ]
             rooms = user.rooms.all().exclude(pk__in = room_pks)
+            groups = user.my_groups.all().exclude(pk__in = grp_pks)
             cont = {
                 'type' : 'keeping',
                 'result' : final,
-                'other' : RoomSerializer(rooms, many = True).data
+                'other' : {
+                    'room' : RoomSerializer(rooms, many = True).data,
+                    'group' : ChatGroupSerializer(groups, many = True).data
+                }
             }
             self.send_json(cont)
         elif content['type'] == 'c_m' :
@@ -267,6 +362,9 @@ class LovConsumer(JsonWebsocketConsumer) :
                     if room.exists() :
                         room = room.first()
                         message = Message.objects.create( room = room, text = me['text'], user = me['user'], old_pk = me['old_pk'] )
+                        if 'get_reply' in me.keys() :
+                            message.reply = me['get_reply']
+                            message.save()
                         #handle_mess_perm(me['get_room'], self.scope['user'], me['old_pk'])
                     else :
                         self.send_json({
