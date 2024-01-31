@@ -336,7 +336,7 @@ def delete_room(request, pk) :
         room = room.first()
         channel_layer = get_channel_layer()
         slug = room.slug
-        prenom = room.prenom
+        prenom = request.user.prenom
         if not is_group :
             PerfectLovDetails.objects.create(key = 'del:room:' + str(room.pk), value = room.slug)
             if request.user in room.users.all() :
