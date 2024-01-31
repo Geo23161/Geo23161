@@ -234,6 +234,7 @@ class LovConsumer(JsonWebsocketConsumer) :
                     group.like.add(UserGroup.objects.get(pk = pk))
             for m in matches :
                 target = User.objects.get(pk = m)
+                is_day = not (target in user.likes.all())
                 if not RoomMatch.objects.filter(slug = room_slug(user, target)).exists() :
                     task = Taches.objects.filter(niveau = 0).first()
                     niv = Niveau.objects.create(cur_task = task.pk)
@@ -243,7 +244,7 @@ class LovConsumer(JsonWebsocketConsumer) :
                     room_match.save()
                     room_match.users.add(user)
                     room_match.users.add(target)
-                    if m['typ'] == 'day-match' :
+                    if is_day :
                         room_match.why = g_v('why:match:day-match')
                         room_match.save()
                     for use in room_match.users.all() :
@@ -251,7 +252,7 @@ class LovConsumer(JsonWebsocketConsumer) :
                             'type' : 'new_room',
                             'result' : RoomSerializer(room_match).data
                         })
-                        notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif' if m['typ'] != 'day-match' else 'new:match:notif:from:day-match' ).format(use.prenom, room_match.why.lower()), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+                        notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif' if is_day != 'day-match' else 'new:match:notif:from:day-match' ).format(use.prenom, room_match.why.lower()), photo = use.get_profil(), user  = the_other(room_match ,use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
             for m in gmatches :
                 g_author = UserGroup.objects.get(pk = m['author'])
                 g_target = UserGroup.objects.get(pk = m['target'])
