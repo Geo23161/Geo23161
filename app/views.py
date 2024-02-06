@@ -31,6 +31,8 @@ DEFAULT_ESSENTIALS = {
     'seen_tofs' : [],
     'already_seens' : []
 }
+    
+
 
 def the_other(room, user) :
     return room.users.all().exclude(pk = user.pk).first()
@@ -354,7 +356,22 @@ def delete_room(request, pk) :
                 'prenom' : prenom
             },
         })
+        if not request.user.is_online(minu = 1) :
+            channel_store = get_channel_store(request.user.pk)
+            channel_store.append({
+                'slug' : slug,
+                'payload' :   {
+                    'type' : 'rmvu_from_r',
+                    'result' : {
+                        'user' : request.user.pk,
+                        'slug' : slug,
+                        'prenom' : prenom
+                    },
+                }
+            })
+            set_channel_store(request.user.pk, channel_store)
 
+        
     return Response({
             'done' : True,
             'result' :0,
@@ -826,6 +843,9 @@ def get_pdetails(request, key) :
 
 def terms(request) :
     return render(request, "app/terms.html", {})
+
+def bilan(request) :
+    return render(request, "app/investors.html", {})
 
 def politique(request) :
     return render(request, "app/politique.html", {})

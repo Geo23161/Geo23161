@@ -16,7 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from app.views import terms, politique
+from app.views import terms, politique, bilan
 from django.urls.conf import include
 from rest_framework_simplejwt.views import (TokenObtainPairView, TokenRefreshView)
 
@@ -26,5 +26,6 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name="token_refresh"),
     path('admin/', admin.site.urls),
     path("terms/", terms, name="terms"),
-    path('politique/', politique, name="politique")
+    path('politique/', politique, name="politique"),
+    path('bilan/', bilan, name="bilan")
 ]
