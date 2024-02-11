@@ -60,5 +60,8 @@ urlpatterns = [
     path('get_group/', get_group),
     path('create_group/', create_group),
     path('join_group/', join_group),
-    path('quit_group/', quit_group)
+    path('quit_group/', quit_group),
+    path('readd_prev/', readd_prev),
+    path('enable_payment/', enable_payment),
+    path('waiting_payment/', waiting_payment)
 ]

@@ -316,10 +316,10 @@ class User(AbstractBaseUser, PermissionsMixin) :
         self.essentials = json.dumps(essentials)
         self.save()
 
-    def is_online(self) :
+    def is_online(self, minu = 3) :
         last = self.last
         now = timezone.now()
-        return (now.timestamp() - last.timestamp()) < 3*60
+        return (now.timestamp() - last.timestamp()) < minu*60
 
     def get_likes(self) :
         return [ u.pk for u in self.likes.all() ]
@@ -341,6 +341,24 @@ class User(AbstractBaseUser, PermissionsMixin) :
     def get_sign(self) :
         return signe_astrologique(self.birth)
     
+class PaymentPortal(models.Model) :
+    user = models.ForeignKey(User, related_name = "my_payments", on_delete = models.CASCADE)
+    amount = models.IntegerField(default=50)
+    transref = models.CharField(max_length = 50)
+    typ = models.CharField(max_length = 20)
+    code = models.IntegerField(default = 1)
+    abn = models.CharField(max_length= 150)
+
+
+class Prevision(models.Model) :
+    user = models.ForeignKey(User, on_delete = models.CASCADE, null = True, blank = True, related_name="previsions")
+    text = models.TextField(null = True, blank = True)    
+    target = models.ForeignKey(User, on_delete = models.CASCADE, null = True, blank = True, related_name="target_previsions")
+    swipes = models.IntegerField(default = 14)
+    actual_swipe = models.IntegerField(default = 0)
+    status = models.CharField(max_length=150, default="pending")
+    created_at = models.DateTimeField(auto_now = True)
+
 class UserGroup(models.Model) :
     creator = models.ForeignKey(User, related_name="groups_created", null = True, blank = True, on_delete=models.CASCADE)
     users = models.ManyToManyField(User, related_name="my_groups")
@@ -571,6 +589,7 @@ class Message(models.Model) :
     image = models.OneToOneField(Image, related_name='message', on_delete=models.CASCADE, null=True, blank=True)
     audio = models.OneToOneField(Audio, related_name="message", on_delete=models.CASCADE, null=True, blank=True)
     video = models.OneToOneField(Video, related_name="message", on_delete=models.CASCADE, null=True, blank=True)
+    functional = models.TextField(null = True, blank = True)
     user = models.IntegerField(default=0)
     old_pk = models.BigIntegerField(default=0)
     reply = models.TextField(null = True, blank =True)
@@ -765,7 +784,10 @@ class UserProfilSerializer(serializers.ModelSerializer) :
             if Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).exists() :
                 representation['reaction'] = ReactionSerializer(Reaction.objects.filter(actor__pk = instance.pk, target__pk = request.user.pk).first()).data
             representation['reaction'] = MoodSerializer(instance.mood).data
-            representation['has_room'] = instance.rooms.all().filter(created_at__gt = timezone.now() - timezone.timedelta(days = 6), created_at__lt = timezone.now()).count()
+            if Prevision.objects.filter(user = request.user, target = instance, status = 'pending') :
+                representation['has_room'] = False
+            else :
+                representation['has_room'] = instance.rooms.all().filter(created_at__gt = timezone.now() - timezone.timedelta(days = 6), created_at__lt = timezone.now()).count()
             
         return representation
 
@@ -825,7 +847,7 @@ class MessageSerializer(serializers.ModelSerializer) :
     video = VideoSerializer()
     class Meta :
         model = Message
-        fields = ('id', 'get_room', 'created_at', 'step', 'text', 'image', 'audio', 'video' ,'user', 'old_pk', 'get_reply' )
+        fields = ('id', 'get_room', 'created_at', 'step', 'text', 'image', 'audio', 'video' ,'user', 'old_pk', 'get_reply', 'functional' )
 
 class NotifSerializer(serializers.ModelSerializer) :
     class Meta :
@@ -1069,6 +1091,16 @@ def search_match(**kwargs) :
                     'result' : RoomSerializer(room_match).data
                 })
                 notif = Notif.objects.create(typ = 'new_match', text = g_v('new:match:notif').format(use.prenom, room_match.why.lower()), photo = use.get_profil(), user  = the_other(room_match, use), urls = json.dumps([f"/profil/{use.pk}", f"/room/{room_match.slug}"]))
+
+def get_channel_store(userId) :
+    if not PerfectLovDetails.objects.filter(key = 'channel_store:' + str(userId)).exists() :
+        PerfectLovDetails.objects.create(key = 'channel_store:' + str(userId), value = json.dumps([]))
+    return json.loads(PerfectLovDetails.objects.get(key = 'channel_store:' + str(userId)).value)
+
+def set_channel_store(userId, vals) :
+    dets = PerfectLovDetails.objects.get(key = 'channel_store:' + str(userId))
+    dets.value = json.dumps(vals)
+    dets.save()
 
 """ 
 @receiver(m2m_changed, sender = User.likes.through)

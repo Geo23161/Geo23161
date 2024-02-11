@@ -63,6 +63,11 @@ class LovConsumer(JsonWebsocketConsumer) :
             for room in all_rooms :
                 r_ex = PerfectLovDetails.objects.filter(key = "anonym:off:room:" + str(room.pk))
                 if r_ex.exists() : r_ex.first().save()
+            
+            stores = get_channel_store(self.scope['user'].pk)
+            for store in stores :
+                async_to_sync(self.channel_layer.group_send)(store['slug'], store['payload'])
+            set_channel_store(self.scope['user'].pk, [])
         send_by_thread(initiate_all)
 
     def new_room(self, ev) :
@@ -73,6 +78,9 @@ class LovConsumer(JsonWebsocketConsumer) :
         return self.send_json(ev)
     
     def rmvu_from_g(self, ev) :
+        return self.send_json(ev)
+    
+    def momo_pay(self, ev) :
         return self.send_json(ev)
     
     def new_message(self, ev) :

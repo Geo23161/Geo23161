@@ -57,14 +57,17 @@ def get_rooms(user : User) :
     ]
 
 
+
 def get_profils_by_me(user : User, excep : list[int]) :
     ex_excepts = [ pk for pk in user.get_excepts() if not pk in excep]
+    """if not user.rooms.all().count() :
+        find_prevision(user, excep)"""
     poss = get_possibles_users(user, excep + ex_excepts)
     likes = user.like.all().intersection(poss).order_by('?')[:random.randint(0, 2)]
-    hazards = [ u  for u in poss.exclude(pk__in = [p.pk for p in likes]).order_by('-created_at')[:500]]
+    hazards = [ u  for u in poss.exclude(pk__in = [p.pk for p in likes]).order_by('-created_at')[:50]]
     random.shuffle(hazards)
     hazards = hazards[:random.randint(1, int(DEFAULT_NUMBER/2))]
-
+    if Prevision.objects.filter(user = user, status = 'pending').exists() : likes = User.objects.filter(pk = 0)
     stars = poss.exclude(pk__in = [l.pk for l in likes] + [u.pk for u in hazards]).annotate(likes__count = Count('likes')).order_by('-likes__count')[:DEFAULT_NUMBER - ( likes.count() + len( hazards))]
     
     finals =[
@@ -82,7 +85,7 @@ def get_profils_by_me(user : User, excep : list[int]) :
                 User.objects.get(pk = pk) for pk in last[:DEFAULT_NUMBER - len(finals)] if User.objects.filter(pk = pk).exists()
             ]
     random.shuffle(finals)
-    return finals
+    return finals, poss.exclude(pk__in = [l.pk for l in finals] ).exclude(mood = user.mood).annotate(likes__count = Count('likes')).order_by('-likes__count')
 
 def the_other(room, user) :
     return room.users.all().exclude(pk = user.pk).first() if room.users.count() > 1 else user
@@ -339,6 +342,9 @@ def find_anonyms(user : User) :
     return None, []
     
 def set_anonyms(user : User) :
+    if user.rooms.all().filter(created_at__gt = timezone.now() - timezone.timedelta(hours = 22), created_at__lt = timezone.now(), is_proposed = True).count() :
+        return
+        
     count = user.rooms.filter(is_proposed = True).count()
     anonym_conv = json.loads(g_v('anonym:conv'))
     if user.cur_abn :
@@ -414,4 +420,34 @@ def find_proposed(group : UserGroup, is_first = False) :
     choice = UserGroup.objects.exclude(pk__in = excepts).exclude(creator__sex = group.creator.sex).order_by('?').first()
     return choice
 
-
+def find_prevision(user : User, excep : list[int]) :
+    
+    if Prevision.objects.filter( created_at__lt = timezone.now() , created_at__gt = timezone.now() - timezone.timedelta(days = 1), user = user ).exists() :
+        return
+    ex_excepts = [ pk for pk in user.get_excepts() if not pk in excep]
+    poss = get_possibles_users(user, excep + ex_excepts )
+    if not ( user.likes.all().intersection(poss).count()) :
+        if user.rooms.filter(created_at__gt = timezone.now() - timezone.timedelta(days = 6), created_at__lt = timezone.now(), is_proposed = False).count() :
+            return
+        compats = find_by_interests(user) + find_by_astro(user)
+        all_poss = [ c['user'] for c in compats if (not c['user'].pk in excep ) and c['user'].rooms.all().filter(created_at__gt = timezone.now() - timezone.timedelta(days = 6), created_at__lt = timezone.now(), is_proposed = False).count() < 4 and not(not c['user'].get_profil()) ]
+        if not len(all_poss) :
+            all_poss = [ u for u in poss if not u.rooms.all().filter(created_at__gt = timezone.now() - timezone.timedelta(days = 6), created_at__lt = timezone.now(), is_proposed = False).count() ]
+        print('thiis ', all_poss)
+        if len(all_poss) :
+            choice = random.choice(all_poss)
+            prev = Prevision.objects.create(user = user, text = g_v('prev:sem:match').format(str(3*DEFAULT_NUMBER)), target = choice, swipes = 2 * DEFAULT_NUMBER )
+    else :
+        matches = user.likes.all().intersection(poss)
+        if matches.count() :
+            matches_interest = [ c['user'] for c in find_by_interests(user) if c['user'] in matches]
+            typ = 'mutual'
+            if len(matches_interest) :
+                choice = random.choice(matches_interest)
+                typ = 'inter'
+            else :
+                choice = random.choice(matches)
+            times = 2
+            prev = Prevision.objects.create(user = user, text = g_v(f'prev:{typ}:match').format(str((times + 1)*DEFAULT_NUMBER )), target = choice, swipes =  times* DEFAULT_NUMBER )
+    
+        

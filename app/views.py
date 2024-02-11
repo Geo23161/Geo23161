@@ -11,12 +11,14 @@ import requests
 from .core import Kkiapay
 from django.utils import timezone
 from django.db import transaction
-from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi, get_emergency, find_proposed
+from .algorithm import daily_tasks, set_match_one, get_possibles_users, get_profils_by_me, set_anonyms, est_entre_vendredi_lundi, get_emergency, find_proposed, find_prevision
 from django.http import JsonResponse
 from random import choice
 from dateutil import parser
 from django.db.models import Count
 import string
+from .qosic import launch_payment as l_p, get_status, asyncio
+import time
 
 def generate_random_string(length=8):
     characters = string.ascii_letters + string.digits
@@ -179,7 +181,7 @@ def register_user(request) :
 
 def set__next(user : User, excep : list[int]) :
     ex_excepts = user.get_excepts()
-    profss = get_profils_by_me(user, ex_excepts, excep)
+    profss = get_profils_by_me(user, ex_excepts, excep)[0]
     store = PerfectLovDetails.objects.get_or_create(key = f"next:for:{user.pk}")[0]
     store.value = json.dumps([
         u.pk for u in profss
@@ -190,7 +192,7 @@ def set__next(user : User, excep : list[int]) :
 def get__next(user : User, ex_excepts : list[int], excep : list[int]) :
     next_profs = PerfectLovDetails.objects.filter(key = f"next:for:{user.pk}")
     if not next_profs.exists()  :
-        profs = get_profils_by_me(user, ex_excepts, excep)
+        profs = get_profils_by_me(user, ex_excepts, excep)[0]
     else :
         profs = [ User.objects.get(pk = pk) for pk in json.loads(next_profs.first().value)]
     if not len(profs) :
@@ -205,7 +207,8 @@ def get_profils(request, typ_rang) :
     date_string = request.data.get('date_string')
     for u in User.objects.filter(birth = None) :
         excepts.append(u.pk)
-    profils = get_profils_by_me(request.user, excepts) if typ_rang == 'for_you' else get_profils_by_proximity(user=request.user, excepts=excepts)
+    all_profs = get_profils_by_me(request.user, excepts)
+    profils = all_profs[0] if typ_rang == 'for_you' else get_profils_by_proximity(user=request.user, excepts=excepts)
     if (request.user.rooms.filter(created_at__gt = timezone.now() - timezone.timedelta(days=10)).count() == 0) :
         emergs = get_emergency(request.user).exclude(pk__in=excepts)[:random.randint(1,3)]
         profils = list(emergs) + profils[:DEFAULT_NUMBER - len(emergs)]
@@ -214,13 +217,72 @@ def get_profils(request, typ_rang) :
         p.pk for p in profils
     ])
     datetime_obj = parser.parse(date_string)
-    return Response({
+    
+    profs = UserProfilSerializer(profils, context = {'request' : request}, many = True).data
+    plaisirs = [ p for p in profs if len([c for c in p['commons'] if c['id']]) or (p['reaction'] == request.user.mood) ]
+    random.shuffle(plaisirs)
+    iplaisirs = plaisirs[:random.randint(3,5)]
+    profils = [ p for p in profils if not p.pk in [f['id'] for f in plaisirs]] + [ User.objects.get(pk = g['id']) for g in iplaisirs]
+    if len(profils) < DEFAULT_NUMBER :
+        profils = profils + list(all_profs[1][:DEFAULT_NUMBER - len(profils)])
+    RESP = {
         'done' : True,
         'result' : UserProfilSerializer(profils, context = {'request' : request}, many = True).data,
         'other' : DEFAULT_NUMBER,
         'allowed' : est_entre_vendredi_lundi(datetime_obj),
         'mood' : request.user.get_mood()
-    })
+    }
+    if Prevision.objects.filter(user = request.user, status = 'pending').exists() :
+        prev = Prevision.objects.filter(user = request.user, status = 'pending').first()
+        r_prev = json.loads(request.data.get('prev'))
+        if not r_prev :
+           r_prev = {
+                'id' : prev.id,
+                'target' : prev.target.pk,
+                'text' : prev.text,
+                'status' : prev.status,
+                'actual_swipe' : prev.actual_swipe
+            }
+        
+        if r_prev['id'] == prev.pk :
+            print(r_prev['actual_swipe'] >= prev.swipes, "test")
+            if r_prev['status'] == 'done' :
+                prev.status = 'done'
+                prev.save()
+            elif r_prev['status'] == 'pending' and r_prev['actual_swipe'] <= (prev.swipes + DEFAULT_NUMBER) :
+                nprofils = [ u for u in profils if u.pk != r_prev['target'] ] 
+                oth = None
+                print(len(nprofils) == len(profils))
+                if len(nprofils) == len(profils) and len(nprofils) :
+                    random.shuffle(nprofils)
+                    oth = nprofils[-1]
+                    profils = nprofils[:-1]
+                else :
+                    random.shuffle(nprofils)
+                    profils = nprofils
+                choice = random.randint(0, 1)
+                print('choice', (bool(choice) or r_prev['actual_swipe']  > prev.swipes))
+                if (bool(choice) or r_prev['actual_swipe']  > prev.swipes) :
+                    profils.append(User.objects.get(pk = r_prev['target']))
+                elif bool(oth) : profils.append(oth)
+                prev.actual_swipe += DEFAULT_NUMBER
+                prev.save()
+            elif r_prev['actual_swipe'] > (prev.swipes + DEFAULT_NUMBER *2 + 1):
+                prev.status = 'missed'
+                prev.save()
+        random.shuffle(profils)
+        print([(p.pk, p.prenom) for p in profils])
+        RESP['prev'] = {
+            'id' : prev.id,
+            'target' : prev.target.pk,
+            'text' : prev.text,
+            'status' : prev.status,
+            'actual_swipe' : prev.actual_swipe
+        }
+        RESP['result'] = UserProfilSerializer(profils, context = {'request' : request}, many = True).data
+    else :
+        find_prevision(request.user, excepts + [p.pk for p in profils])
+    return Response(RESP)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -1154,3 +1216,99 @@ def quit_group(request) :
         'done' : True,
         'result' : slugs
     })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def readd_prev(request) :
+    target = request.data.get('target')
+    user : User = request.user
+    excepts = user.get_excepts()
+    user.set_excepts([pk for pk in excepts if pk != target])
+    return Response({
+        'done'  :True
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def enable_payment(request) :
+    number = request.data.get('number')
+    typ = request.data.get('typ')
+    amount = request.data.get('amount')
+    clientid = g_v('qosic:clientid')
+    transref = request.data.get('transref')
+    abn = request.data.get('abn')
+    code = l_p(number, transref, typ, amount, clientid)
+    if code == 1 :
+        PaymentPortal.objects.create(number = number, typ = typ, amount = amount, transref = transref, code = 1, abn = abn)
+        return Response({
+            'done' : True,
+            'result' : transref
+        })
+    else :
+        return Response({
+            'done' : False
+        })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def waiting_payment(request) :
+    clientid = g_v('qosic:clientid')
+    transref = request.data.get('transref')
+    portal = PaymentPortal.objects.filter(user = request, transref = transref).first()
+    channel_layer = get_channel_layer()
+    if portal :
+        def set_code() :
+            code = portal.code
+            while code == 1 :
+                code = get_status(transref, clientid = clientid)
+                time.sleep(0.3)
+            
+            portal.code = code
+            portal.save()
+
+            if code not in [0, 1] :
+                async_to_sync(channel_layer.group_send)(f"{request.user.pk}m{request.user.pk}", {
+                    'type' : 'momo_pay',
+                    'result' : {
+                        'transref' : transref,
+                        'status' : 'error'
+                    },
+                })
+            else :
+                abon = {
+                    'typ' : abn
+                }
+                state = "free" if not user.cur_abn else user.cur_abn.get_typ()['typ']
+                user = request.user
+                Notif.objects.create(typ = "new_abon", text = g_v('notif:new:abon').format(state), user = user, urls = json.dumps(["/param?target=cur_abn"]))
+                abn = Abon.objects.create(typ = g_v('typ:' + abon['typ']), debut = timezone.now(), user = request.user, status = abon['typ'])
+                verifs = Verif.objects.filter(user = request.user)
+                if verifs.exists() and state != 'free' :
+                    verif = verifs.first()
+                    Abon.objects.filter(pk = abn.pk).update(verif = verif)
+                user.cur_abn = abn
+                aboned_before = Abon.objects.filter(user = request.user).exclude(pk = abn.pk).exists()
+                if state != 'free' or not aboned_before :
+                    essentials = request.user.get_essentials()
+                    now = timezone.now()
+                    day_string = f"{now.year}:{now.month}:{now.day}"
+                    essentials["all_swipe"][day_string] = 0
+                    user.essentials = json.dumps(essentials)
+                user.save()
+                async_to_sync(channel_layer.group_send)(f"{request.user.pk}m{request.user.pk}", {
+                    'type' : 'momo_pay',
+                    'result' : {
+                        'transref' : transref,
+                        'status' : 'success'
+                    },
+                    'other' : AbonSerializer(abn)
+                })
+        send_by_thread(set_code)
+        return Response({
+            'done' : True,
+        })
+    else :
+        return Response({
+            'done' : False
+        })
