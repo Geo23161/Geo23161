@@ -234,9 +234,12 @@ def get_profils(request, typ_rang) :
     }
     if Prevision.objects.filter(user = request.user, status = 'pending').exists() :
         prev = Prevision.objects.filter(user = request.user, status = 'pending').first()
+        if (timezone.now() - prev.created_at) > timezone.timedelta(days=1) :
+            prev.delete()
+            return 
         r_prev = json.loads(request.data.get('prev'))
         if not r_prev :
-           r_prev = {
+            r_prev = {
                 'id' : prev.id,
                 'target' : prev.target.pk,
                 'text' : prev.text,
@@ -1113,7 +1116,7 @@ def create_group(request) :
     agroup = request.user.my_groups.all().annotate(us_count = Count('users')).filter(us_count = 1)
     if agroup.exists() :
         return Response({
-            'done' : True, 
+            'done' : True,
             'result' : 0
         })
     else :
@@ -1263,7 +1266,7 @@ def waiting_payment(request) :
             while code == 1 :
                 code = get_status(transref, clientid = clientid)
                 time.sleep(0.3)
-            
+    
             portal.code = code
             portal.save()
 
